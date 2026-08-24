@@ -52,7 +52,8 @@ Write-Host ""
 # 1. Update version in pubspec.yaml
 Write-Host "[1/5] Updating pubspec.yaml to version: $TargetVersionString..." -ForegroundColor Yellow
 $UpdatedPubspec = $PubspecContent -replace 'version:\s*[^\r\n]+', "version: $TargetVersionString"
-$UpdatedPubspec | Out-File -FilePath $PubspecPath -Encoding utf8 -NoNewline
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($PubspecPath, $UpdatedPubspec, $Utf8NoBom)
 
 # 2. Run static analysis
 Write-Host "[2/5] Running static analysis check..." -ForegroundColor Yellow
