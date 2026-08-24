@@ -7,6 +7,7 @@ import 'package:notetosms/src/rust/p2p.dart';
 import 'package:notetosms/src/rust/storage.dart';
 import 'package:notetosms/ui/dialogs/room_dialogs.dart';
 import 'package:notetosms/ui/dialogs/settings_dialog.dart';
+import 'package:notetosms/ui/dialogs/version_history_dialog.dart';
 import 'package:notetosms/ui/views/conversation_list_view.dart';
 import 'package:notetosms/ui/widgets/chat_bubble.dart';
 import 'package:notetosms/ui/widgets/date_header.dart';
@@ -15,8 +16,9 @@ import 'package:notetosms/ui/widgets/typing_indicator_bubble.dart';
 
 class ChatScreen extends StatefulWidget {
   final String? initialRoomId;
+  final String? initialInviteData;
 
-  const ChatScreen({super.key, this.initialRoomId});
+  const ChatScreen({super.key, this.initialRoomId, this.initialInviteData});
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -47,6 +49,21 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     _loadInitialData();
     _initP2p();
+
+    if (widget.initialInviteData != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          RoomDialogs.showJoinRoomDialog(
+            context,
+            initialInviteData: widget.initialInviteData,
+            onRoomJoined: (room) {
+              _loadInitialData();
+              setState(() => _currentRoomId = room.id);
+            },
+          );
+        }
+      });
+    }
   }
 
   @override
@@ -443,6 +460,14 @@ class _ChatScreenState extends State<ChatScreen> {
                 if (currentRoom != null) {
                   RoomDialogs.showShareRoomDialog(context, currentRoom);
                 }
+              } else if (value == 'join_room') {
+                RoomDialogs.showJoinRoomDialog(
+                  context,
+                  onRoomJoined: (room) {
+                    _loadInitialData();
+                    setState(() => _currentRoomId = room.id);
+                  },
+                );
               } else if (value == 'bubble') {
                 if (currentRoom != null) {
                   BubbleService.instance
@@ -461,6 +486,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 }
               } else if (value == 'security') {
                 SettingsDialog.showSecurityInfo(context);
+              } else if (value == 'check_updates') {
+                VersionHistoryDialog.show(context);
               } else if (value == 'delete') {
                 if (currentRoom != null) {
                   RoomDialogs.showDeleteRoom(
@@ -495,7 +522,17 @@ class _ChatScreenState extends State<ChatScreen> {
                   children: [
                     Icon(Icons.qr_code_rounded, size: 20, color: AppTheme.secondary),
                     SizedBox(width: 10),
-                    Text('Share Room via P2P'),
+                    Text('Share Thread / Invite'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'join_room',
+                child: Row(
+                  children: [
+                    Icon(Icons.group_add_rounded, size: 20, color: AppTheme.tertiary),
+                    SizedBox(width: 10),
+                    Text('Join Shared Thread'),
                   ],
                 ),
               ),
@@ -506,6 +543,16 @@ class _ChatScreenState extends State<ChatScreen> {
                     Icon(Icons.shield_outlined, size: 20),
                     SizedBox(width: 10),
                     Text('Security Specs'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'check_updates',
+                child: Row(
+                  children: [
+                    Icon(Icons.system_update_rounded, size: 20, color: AppTheme.primary),
+                    SizedBox(width: 10),
+                    Text('Check for Updates'),
                   ],
                 ),
               ),

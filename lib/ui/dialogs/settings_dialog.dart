@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:notetosms/core/theme/app_theme.dart';
 import 'package:notetosms/services/vault_service.dart';
+import 'package:notetosms/ui/dialogs/version_history_dialog.dart';
 
 class SettingsDialog {
   static Future<void> showChangePassphrase(BuildContext context) async {
@@ -127,6 +129,8 @@ class SettingsDialog {
 
   static Future<void> showSecurityInfo(BuildContext context) async {
     final dbPath = await VaultService.instance.getDatabasePath();
+    final packageInfo = await PackageInfo.fromPlatform();
+    final versionStr = 'v${packageInfo.version} (${packageInfo.buildNumber})';
 
     if (!context.mounted) return;
 
@@ -178,6 +182,12 @@ class SettingsDialog {
               const SizedBox(height: 18),
               _buildSecurityItem(
                 context: ctx,
+                title: 'Application Version',
+                desc: versionStr,
+                icon: Icons.info_outline,
+              ),
+              _buildSecurityItem(
+                context: ctx,
                 title: 'Key Derivation',
                 desc: 'Argon2id (64MB memory, 3 iterations, 16-byte random salt)',
                 icon: Icons.shield,
@@ -205,6 +215,24 @@ class SettingsDialog {
                 title: 'Storage Path',
                 desc: dbPath,
                 icon: Icons.folder_outlined,
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: colorScheme.primary,
+                    side: BorderSide(color: colorScheme.primary.withValues(alpha: 0.4)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  icon: const Icon(Icons.history_rounded, size: 20),
+                  label: const Text('App Updates & Version History'),
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    VersionHistoryDialog.show(context);
+                  },
+                ),
               ),
             ],
           ),

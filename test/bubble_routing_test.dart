@@ -29,5 +29,17 @@ void main() {
       expect(uri.pathSegments, equals(['finance']));
       expect(uri.pathSegments.last, equals('finance'));
     });
+
+    test('Parses notetosms://join?data=... and chatnotes://join deep links correctly', () {
+      final uri1 = Uri.parse('notetosms://join?data=eyJ2ZXJzaW9uIjoxLCJyb29tX2lkIjoidGVzdCJ9');
+      expect(uri1.scheme, equals('notetosms'));
+      expect(uri1.host, equals('join'));
+      expect(uri1.queryParameters['data'], equals('eyJ2ZXJzaW9uIjoxLCJyb29tX2lkIjoidGVzdCJ9'));
+
+      final uri2 = Uri.parse('chatnotes://join?data=eyJ2ZXJzaW9uIjoxLCJyb29tX2lkIjoidGVzdCJ9');
+      expect(uri2.scheme, equals('chatnotes'));
+      expect(uri2.host, equals('join'));
+      expect(uri2.queryParameters['data'], equals('eyJ2ZXJzaW9uIjoxLCJyb29tX2lkIjoidGVzdCJ9'));
+    });
   });
 }

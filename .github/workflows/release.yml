@@ -115,11 +115,51 @@ jobs:
           fi
           echo "RELEASE_TAG=$TAG" >> $GITHUB_ENV
 
+      - name: Generate Changelog & Release Notes
+        id: changelog
+        run: |
+          git fetch --tags --force
+          
+          CURRENT_TAG="${{ env.RELEASE_TAG }}"
+          PREV_TAG=$(git describe --tags --abbrev=0 "$CURRENT_TAG^" 2>/dev/null || echo "")
+
+          echo "Generating changelog between '$PREV_TAG' and '$CURRENT_TAG'..."
+
+          CHANGELOG_FILE="dist/CHANGELOG.md"
+          echo "## What's Changed in $CURRENT_TAG" > "$CHANGELOG_FILE"
+          echo "" >> "$CHANGELOG_FILE"
+
+          # 1. Custom RELEASE_NOTES.md if present
+          if [ -f "RELEASE_NOTES.md" ] && [ -s "RELEASE_NOTES.md" ]; then
+            cat "RELEASE_NOTES.md" >> "$CHANGELOG_FILE"
+            echo "" >> "$CHANGELOG_FILE"
+          fi
+
+          # 2. Git tag annotation message if present
+          TAG_MSG=$(git tag -l --format='%(contents)' "$CURRENT_TAG" 2>/dev/null || echo "")
+          if [ -n "$TAG_MSG" ] && [ "$TAG_MSG" != "Release $CURRENT_TAG" ]; then
+            echo "### Release Highlights" >> "$CHANGELOG_FILE"
+            echo "$TAG_MSG" >> "$CHANGELOG_FILE"
+            echo "" >> "$CHANGELOG_FILE"
+          fi
+
+          # 3. Commit subject list between previous tag and current tag
+          echo "### Commit History" >> "$CHANGELOG_FILE"
+          if [ -n "$PREV_TAG" ]; then
+            git log "$PREV_TAG..$CURRENT_TAG" --pretty=format:"* %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" >> "$CHANGELOG_FILE" || true
+          else
+            git log "$CURRENT_TAG" -n 25 --pretty=format:"* %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" >> "$CHANGELOG_FILE" || true
+          fi
+          echo "" >> "$CHANGELOG_FILE"
+
+          cat "$CHANGELOG_FILE"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: notetosms ${{ env.RELEASE_TAG }}
+          body_path: dist/CHANGELOG.md
           files: dist/*
           prerelease: ${{ env.IS_PRERELEASE == 'true' }}
           generate_release_notes: true

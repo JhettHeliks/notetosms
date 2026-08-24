@@ -4,7 +4,7 @@ use crate::frb_generated::StreamSink;
 
 pub use crate::p2p::P2pEvent;
 use crate::p2p::P2pNode;
-pub use crate::storage::{NoteItem, RoomItem, VaultStatus};
+pub use crate::storage::{NoteItem, RoomInvite, RoomItem, VaultStatus};
 use crate::storage::EncryptedStore;
 
 static GLOBAL_STORE: Mutex<Option<EncryptedStore>> = Mutex::new(None);
@@ -153,6 +153,21 @@ pub fn create_room(id: String, name: String, icon: String, color: u32) -> Result
 /// Delete a room and its associated notes.
 pub fn delete_room(room_id: String) -> Result<()> {
     with_store(|store| store.delete_room(&room_id))
+}
+
+/// Export a shareable room invite token/URI for a note channel.
+pub fn export_room_invite(room_id: String) -> Result<String> {
+    with_store(|store| store.export_room_invite(&room_id))
+}
+
+/// Parse a room invite URI / token without joining.
+pub fn parse_room_invite(invite_data: String) -> Result<RoomInvite> {
+    with_store(|store| store.parse_room_invite(&invite_data))
+}
+
+/// Import and join a note room using an invite token / URI.
+pub fn import_room_invite(invite_data: String) -> Result<RoomItem> {
+    with_store(|store| store.import_room_invite(&invite_data))
 }
 
 // ---------------------------------------------------------------------------

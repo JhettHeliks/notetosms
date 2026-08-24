@@ -109,6 +109,18 @@ Future<RoomItem> createRoom({
 Future<void> deleteRoom({required String roomId}) =>
     RustLib.instance.api.crateApiNotesDeleteRoom(roomId: roomId);
 
+/// Export a shareable room invite token/URI for a note channel.
+Future<String> exportRoomInvite({required String roomId}) =>
+    RustLib.instance.api.crateApiNotesExportRoomInvite(roomId: roomId);
+
+/// Parse a room invite URI / token without joining.
+Future<RoomInvite> parseRoomInvite({required String inviteData}) =>
+    RustLib.instance.api.crateApiNotesParseRoomInvite(inviteData: inviteData);
+
+/// Import and join a note room using an invite token / URI.
+Future<RoomItem> importRoomInvite({required String inviteData}) =>
+    RustLib.instance.api.crateApiNotesImportRoomInvite(inviteData: inviteData);
+
 /// Start or initialize the local Iroh P2P node and return its NodeId string.
 Future<String> startP2PNode() =>
     RustLib.instance.api.crateApiNotesStartP2PNode();

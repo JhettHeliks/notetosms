@@ -52,6 +52,11 @@ Built with **Flutter (Material 3)** for fluid, dynamic user experience and a hig
 - **Deep Linking**: Full support for `notetosms://room/{roomId}` and `chatnotes://room/{roomId}` deep link routes.
 - **Dynamic Shortcuts**: Native integration with `ShortcutManagerCompat` and `NotificationCompat.BubbleMetadata`.
 
+### 🔄 In-App Self-Updater (Sideloaded APKs)
+- **Direct GitHub Releases Sync**: Check for new beta and stable releases directly within the app without needing a computer.
+- **Over-The-Air (OTA) Sideloading**: Streamlined download and native Android package installation (`REQUEST_INSTALL_PACKAGES`) powered by `ota_update`.
+- **Live Progress & Release Notes**: Full visibility into update changelogs, download progress percentage, and package size.
+
 ---
 
 ## 🏗️ Architecture

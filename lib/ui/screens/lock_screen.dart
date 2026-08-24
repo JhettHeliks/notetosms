@@ -5,7 +5,9 @@ import 'package:notetosms/services/vault_service.dart';
 import 'package:notetosms/ui/screens/chat_screen.dart';
 
 class LockScreen extends StatefulWidget {
-  const LockScreen({super.key});
+  final String? initialInviteData;
+
+  const LockScreen({super.key, this.initialInviteData});
 
   @override
   State<LockScreen> createState() => _LockScreenState();
@@ -81,7 +83,8 @@ class _LockScreenState extends State<LockScreen> {
       if (status.isUnlocked && mounted) {
         Navigator.of(context).pushReplacement(
           PageRouteBuilder(
-            pageBuilder: (context, animation, secondaryAnimation) => const ChatScreen(),
+            pageBuilder: (context, animation, secondaryAnimation) =>
+                ChatScreen(initialInviteData: widget.initialInviteData),
             transitionsBuilder: (context, animation, secondaryAnimation, child) {
               return FadeTransition(opacity: animation, child: child);
             },

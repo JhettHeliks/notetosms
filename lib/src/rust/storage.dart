@@ -53,6 +53,49 @@ class NoteItem {
           tags == other.tags;
 }
 
+class RoomInvite {
+  final int version;
+  final String roomId;
+  final String name;
+  final String icon;
+  final int color;
+  final String roomKeyBase64;
+  final PlatformInt64 createdAt;
+
+  const RoomInvite({
+    required this.version,
+    required this.roomId,
+    required this.name,
+    required this.icon,
+    required this.color,
+    required this.roomKeyBase64,
+    required this.createdAt,
+  });
+
+  @override
+  int get hashCode =>
+      version.hashCode ^
+      roomId.hashCode ^
+      name.hashCode ^
+      icon.hashCode ^
+      color.hashCode ^
+      roomKeyBase64.hashCode ^
+      createdAt.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is RoomInvite &&
+          runtimeType == other.runtimeType &&
+          version == other.version &&
+          roomId == other.roomId &&
+          name == other.name &&
+          icon == other.icon &&
+          color == other.color &&
+          roomKeyBase64 == other.roomKeyBase64 &&
+          createdAt == other.createdAt;
+}
+
 class RoomItem {
   final String id;
   final String name;

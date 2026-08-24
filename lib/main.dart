@@ -24,7 +24,27 @@ class NoteToSmsApp extends StatelessWidget {
         final uri = Uri.tryParse(settings.name ?? '/');
 
         if (uri != null) {
-          // 1. Handle explicit bubble route (e.g. /bubble?roomId=project-x)
+          // 1. Handle thread join deep links (e.g. notetosms://join?data=... or chatnotes://join?data=...)
+          if (uri.scheme == 'notetosms' || uri.scheme == 'chatnotes') {
+            if (uri.host == 'join' || uri.path.startsWith('/join')) {
+              final rawInvite = settings.name ?? uri.toString();
+              return MaterialPageRoute(
+                builder: (context) => LockScreen(initialInviteData: rawInvite),
+                settings: settings,
+              );
+            }
+          }
+
+          // 2. Handle web/relative path /join?data=...
+          if (uri.path == '/join' || uri.path.startsWith('/join/')) {
+            final rawInvite = settings.name ?? uri.toString();
+            return MaterialPageRoute(
+              builder: (context) => LockScreen(initialInviteData: rawInvite),
+              settings: settings,
+            );
+          }
+
+          // 3. Handle explicit bubble route (e.g. /bubble?roomId=project-x)
           if (uri.path == '/bubble' || uri.path.startsWith('/bubble/')) {
             String roomId = uri.queryParameters['roomId'] ?? 'general';
             if (uri.pathSegments.length > 1 && uri.pathSegments[0] == 'bubble') {
@@ -36,7 +56,7 @@ class NoteToSmsApp extends StatelessWidget {
             );
           }
 
-          // 2. Handle deep link URI (e.g. notetosms://room/project-x or chatnotes://room/project-x)
+          // 4. Handle room deep link URI (e.g. notetosms://room/project-x or chatnotes://room/project-x)
           if (uri.scheme == 'notetosms' || uri.scheme == 'chatnotes') {
             if (uri.host == 'room' || uri.path.startsWith('/room')) {
               String roomId = 'general';
@@ -52,7 +72,7 @@ class NoteToSmsApp extends StatelessWidget {
             }
           }
 
-          // 3. Handle web/standard path /room/:roomId
+          // 5. Handle web/standard path /room/:roomId
           if (uri.path.startsWith('/room/')) {
             final roomId = uri.pathSegments.length > 1 ? uri.pathSegments[1] : 'general';
             return MaterialPageRoute(

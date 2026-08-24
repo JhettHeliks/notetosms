@@ -109,6 +109,22 @@ class VaultService {
   }
 
   // -------------------------------------------------------------------------
+  // Room Invites & Channel Sharing
+  // -------------------------------------------------------------------------
+
+  Future<String> exportRoomInvite(String roomId) async {
+    return rust_api.exportRoomInvite(roomId: roomId);
+  }
+
+  Future<RoomInvite> parseRoomInvite(String inviteData) async {
+    return rust_api.parseRoomInvite(inviteData: inviteData);
+  }
+
+  Future<RoomItem> importRoomInvite(String inviteData) async {
+    return rust_api.importRoomInvite(inviteData: inviteData);
+  }
+
+  // -------------------------------------------------------------------------
   // P2P Shared Notes & Sync
   // -------------------------------------------------------------------------
 

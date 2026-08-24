@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:notetosms/core/theme/app_theme.dart';
+import 'package:notetosms/services/update_service.dart';
 import 'package:notetosms/services/vault_service.dart';
 import 'package:notetosms/src/rust/storage.dart';
 import 'package:notetosms/ui/dialogs/room_dialogs.dart';
 import 'package:notetosms/ui/dialogs/settings_dialog.dart';
+import 'package:notetosms/ui/dialogs/update_dialog.dart';
+import 'package:notetosms/ui/dialogs/version_history_dialog.dart';
 import 'package:notetosms/ui/screens/lock_screen.dart';
 
 class RoomPreview {
@@ -40,11 +43,27 @@ class _ConversationListViewState extends State<ConversationListView> {
   List<RoomPreview> _previews = [];
   bool _isLoading = true;
   String _searchQuery = '';
+  AppUpdateInfo? _availableUpdate;
+  bool _dismissedUpdateBanner = false;
 
   @override
   void initState() {
     super.initState();
     _loadPreviews();
+    _checkSilentlyForUpdates();
+  }
+
+  Future<void> _checkSilentlyForUpdates() async {
+    try {
+      final info = await UpdateService.instance.checkForUpdate();
+      if (mounted && info.hasUpdate) {
+        setState(() {
+          _availableUpdate = info;
+        });
+      }
+    } catch (_) {
+      // Ignore background check network errors silently
+    }
   }
 
   @override
@@ -227,6 +246,10 @@ class _ConversationListViewState extends State<ConversationListView> {
                               widget.onSelectRoom(room.id);
                             },
                           );
+                        } else if (value == 'security') {
+                          SettingsDialog.showSecurityInfo(context);
+                        } else if (value == 'check_updates') {
+                          VersionHistoryDialog.show(context);
                         } else if (value == 'lock') {
                           _handleLockVault();
                         }
@@ -272,6 +295,16 @@ class _ConversationListViewState extends State<ConversationListView> {
                             ],
                           ),
                         ),
+                        const PopupMenuItem(
+                          value: 'check_updates',
+                          child: Row(
+                            children: [
+                              Icon(Icons.system_update_rounded, size: 20, color: AppTheme.primary),
+                              SizedBox(width: 10),
+                              Text('Check for Updates'),
+                            ],
+                          ),
+                        ),
                         const PopupMenuDivider(),
                         const PopupMenuItem(
                           value: 'lock',
@@ -290,6 +323,80 @@ class _ConversationListViewState extends State<ConversationListView> {
                 ),
               ),
             ),
+
+            // In-App Update Notification Banner
+            if (_availableUpdate != null && !_dismissedUpdateBanner)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: colorScheme.primary.withValues(alpha: 0.3)),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: colorScheme.primary,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.system_update_rounded,
+                          size: 16,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'Update Available: v${_availableUpdate!.latestVersion}',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                color: colorScheme.onPrimaryContainer,
+                              ),
+                            ),
+                            Text(
+                              _availableUpdate!.isPrerelease ? 'New beta build ready' : 'New release ready to install',
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                color: colorScheme.onPrimaryContainer.withValues(alpha: 0.8),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      TextButton(
+                        style: TextButton.styleFrom(
+                          backgroundColor: colorScheme.primary,
+                          foregroundColor: colorScheme.onPrimary,
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        onPressed: () => UpdateDialog.show(context, _availableUpdate!),
+                        child: const Text('Update', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      ),
+                      const SizedBox(width: 4),
+                      IconButton(
+                        icon: Icon(Icons.close, size: 16, color: colorScheme.onPrimaryContainer),
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        onPressed: () => setState(() => _dismissedUpdateBanner = true),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
 
             // Conversation List
             Expanded(

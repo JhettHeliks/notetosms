@@ -75,6 +75,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   P2pEvent dco_decode_p_2_p_event(dynamic raw);
 
   @protected
+  RoomInvite dco_decode_room_invite(dynamic raw);
+
+  @protected
   RoomItem dco_decode_room_item(dynamic raw);
 
   @protected
@@ -141,6 +144,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   P2pEvent sse_decode_p_2_p_event(SseDeserializer deserializer);
+
+  @protected
+  RoomInvite sse_decode_room_invite(SseDeserializer deserializer);
 
   @protected
   RoomItem sse_decode_room_item(SseDeserializer deserializer);
@@ -222,6 +228,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_p_2_p_event(P2pEvent self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_room_invite(RoomInvite self, SseSerializer serializer);
 
   @protected
   void sse_encode_room_item(RoomItem self, SseSerializer serializer);

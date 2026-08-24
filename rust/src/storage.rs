@@ -2,6 +2,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
+use base64::Engine;
 use rand::RngCore;
 use rusqlite::{params, Connection, OptionalExtension};
 use zeroize::Zeroizing;
@@ -33,6 +34,17 @@ pub struct RoomItem {
     pub color: u32,
     pub created_at: i64,
     pub sort_order: i32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RoomInvite {
+    pub version: u32,
+    pub room_id: String,
+    pub name: String,
+    pub icon: String,
+    pub color: u32,
+    pub room_key_base64: String,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -833,12 +845,103 @@ impl EncryptedStore {
         })
     }
 
+    pub fn get_room(&self, room_id: &str) -> Result<RoomItem> {
+        self.conn
+            .query_row(
+                "SELECT id, name, icon, color, created_at, sort_order FROM rooms WHERE id = ?1",
+                params![room_id],
+                |r| {
+                    Ok(RoomItem {
+                        id: r.get(0)?,
+                        name: r.get(1)?,
+                        icon: r.get(2)?,
+                        color: r.get::<_, i64>(3)? as u32,
+                        created_at: r.get(4)?,
+                        sort_order: r.get(5)?,
+                    })
+                },
+            )
+            .map_err(|e| anyhow!("Room '{room_id}' not found: {e}"))
+    }
+
     pub fn delete_room(&mut self, room_id: &str) -> Result<()> {
         if room_id == "general" {
             return Err(anyhow!("The default #general room cannot be deleted"));
         }
         self.conn.execute("DELETE FROM rooms WHERE id = ?1", params![room_id])?;
         Ok(())
+    }
+
+    /// Exports a shareable invite URI containing the room metadata and symmetric key payload.
+    pub fn export_room_invite(&self, room_id: &str) -> Result<String> {
+        let _ = self.get_active_key()?;
+        let room = self.get_room(room_id)?;
+
+        let mut key_bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut key_bytes);
+        let room_key_base64 = base64::engine::general_purpose::STANDARD.encode(&key_bytes);
+
+        let invite = RoomInvite {
+            version: 1,
+            room_id: room.id,
+            name: room.name,
+            icon: room.icon,
+            color: room.color,
+            room_key_base64,
+            created_at: current_time_ms(),
+        };
+
+        let json_bytes = serde_json::to_vec(&invite)?;
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&json_bytes);
+        Ok(format!("notetosms://join?data={b64}"))
+    }
+
+    /// Parses and validates a room invite payload from a URI, deep link, or raw Base64 string.
+    pub fn parse_room_invite_data(invite_data: &str) -> Result<RoomInvite> {
+        let trimmed = invite_data.trim();
+        let payload_b64 = if let Some(idx) = trimmed.find("data=") {
+            &trimmed[idx + 5..]
+        } else if let Some(idx) = trimmed.find("/join/") {
+            &trimmed[idx + 6..]
+        } else {
+            trimmed
+        };
+
+        let clean_b64 = payload_b64.split('&').next().unwrap_or(payload_b64);
+
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(clean_b64)
+            .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(clean_b64))
+            .or_else(|_| base64::engine::general_purpose::STANDARD.decode(clean_b64))
+            .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(clean_b64))
+            .context("Failed to decode base64 room invite payload")?;
+
+        let invite: RoomInvite = serde_json::from_slice(&decoded)
+            .context("Invalid room invite JSON structure")?;
+
+        if invite.room_id.trim().is_empty() || invite.name.trim().is_empty() {
+            return Err(anyhow!("Room invite is missing required fields"));
+        }
+
+        Ok(invite)
+    }
+
+    /// Parses a room invite string without modifying the store.
+    pub fn parse_room_invite(&self, invite_data: &str) -> Result<RoomInvite> {
+        Self::parse_room_invite_data(invite_data)
+    }
+
+    /// Imports a room from an invite payload, creating it if it doesn't already exist.
+    pub fn import_room_invite(&mut self, invite_data: &str) -> Result<RoomItem> {
+        let _ = self.get_active_key()?;
+        let invite = Self::parse_room_invite_data(invite_data)?;
+
+        // If room already exists, return it
+        if let Ok(existing) = self.get_room(&invite.room_id) {
+            return Ok(existing);
+        }
+
+        self.create_room(&invite.room_id, &invite.name, &invite.icon, invite.color)
     }
 }
 
@@ -1016,5 +1119,39 @@ mod tests {
         let notes = store.get_notes("general").unwrap();
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].content, "Secret message to be re-encrypted");
+    }
+
+    #[test]
+    fn test_export_and_import_room_invite() {
+        let mut store_a = EncryptedStore::open_in_memory().expect("open memory a");
+        store_a.unlock_or_init("secret_a").unwrap();
+
+        // Create a custom room in store A
+        let custom_room = store_a
+            .create_room("project-alpha", "Project Alpha", "rocket_launch", 0xFF10B981)
+            .unwrap();
+
+        // Export invite from store A
+        let invite_uri = store_a.export_room_invite(&custom_room.id).unwrap();
+        assert!(invite_uri.starts_with("notetosms://join?data="));
+
+        // Parse invite without modifying
+        let parsed = EncryptedStore::parse_room_invite_data(&invite_uri).unwrap();
+        assert_eq!(parsed.room_id, "project-alpha");
+        assert_eq!(parsed.name, "Project Alpha");
+        assert_eq!(parsed.icon, "rocket_launch");
+        assert_eq!(parsed.color, 0xFF10B981);
+
+        // Store B imports the invite
+        let mut store_b = EncryptedStore::open_in_memory().expect("open memory b");
+        store_b.unlock_or_init("secret_b").unwrap();
+
+        let imported_room = store_b.import_room_invite(&invite_uri).unwrap();
+        assert_eq!(imported_room.id, "project-alpha");
+        assert_eq!(imported_room.name, "Project Alpha");
+
+        // Re-importing should return existing room idempotently
+        let reimported = store_b.import_room_invite(&invite_uri).unwrap();
+        assert_eq!(reimported.id, "project-alpha");
     }
 }
