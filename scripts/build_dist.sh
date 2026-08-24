@@ -77,7 +77,11 @@ if [ "$SKIP_CODEGEN" = false ]; then
 fi
 
 echo "[3/4] Compiling Flutter APK ($MODE)..."
-BUILD_ARGS=("build" "apk" "--$MODE")
+FLUTTER_MODE="release"
+if [ "$MODE" = "debug" ]; then
+    FLUTTER_MODE="debug"
+fi
+BUILD_ARGS=("build" "apk" "--$FLUTTER_MODE")
 if [ "$SPLIT_PER_ABI" = true ]; then
   BUILD_ARGS+=("--split-per-abi")
 fi

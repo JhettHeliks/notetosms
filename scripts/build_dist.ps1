@@ -57,7 +57,8 @@ if (-not $SkipCodegen) {
 
 # 3. Compile Flutter APK
 Write-Host "[3/4] Compiling Flutter APK ($Mode)..." -ForegroundColor Yellow
-$BuildArgs = @("build", "apk", "--$Mode")
+$FlutterMode = if ($Mode -eq "debug") { "debug" } else { "release" }
+$BuildArgs = @("build", "apk", "--$FlutterMode")
 if ($SplitPerAbi) {
     $BuildArgs += "--split-per-abi"
 }
