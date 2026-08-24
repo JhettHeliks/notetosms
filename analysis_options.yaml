@@ -1,5 +1,16 @@
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  exclude:
+    - "build/**"
+    - "rust_builder/**"
+    - "lib/src/rust/frb_generated*.dart"
+    - "lib/src/rust/frb_generated.dart"
+    - "lib/src/rust/frb_generated.io.dart"
+    - "lib/src/rust/frb_generated.web.dart"
+    - "**/*.g.dart"
+    - ".dart_tool/**"
+
 linter:
   rules:
     # avoid_print: false  # Uncomment to disable the `avoid_print` rule

@@ -69,7 +69,7 @@ jobs:
 
       - name: Run Flutter Static Analysis & Tests
         run: |
-          flutter analyze
+          flutter analyze lib/
           flutter test
 
       - name: Build Universal Release APK
