@@ -18,7 +18,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
-class MainActivity : FlutterActivity() {
+open class MainActivity : FlutterActivity() {
     private val BUBBLE_CHANNEL_PRIMARY = "com.notetosms/bubbles"
     private val BUBBLE_CHANNEL_LEGACY = "com.chatnotes/bubbles"
     private val NOTIFICATION_CHANNEL_ID = "notetosms_bubble_conversations"
