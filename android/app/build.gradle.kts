@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.chat_notes"
+    namespace = "com.notetosms.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -20,10 +20,7 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.chat_notes"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        applicationId = "com.notetosms.app"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
@@ -32,11 +29,28 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
+            // Signing with the debug keys for local testing, replace with release signing for production keystore.
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    applicationVariants.all {
+        val variant = this
+        variant.outputs.all {
+            val output = this
+            if (output is com.android.build.gradle.internal.api.BaseVariantOutputImpl) {
+                val vName = variant.versionName ?: "1.0.0"
+                val bType = variant.buildType.name
+                val abi = output.getFilter(com.android.build.OutputFile.ABI)
+                val abiSuffix = if (abi != null) "-$abi" else ""
+                output.outputFileName = "notetosms-v${vName}-${bType}${abiSuffix}.apk"
+            }
+        }
+    }
+}
+
+dependencies {
+    implementation("androidx.core:core-ktx:1.13.1")
 }
 
 flutter {

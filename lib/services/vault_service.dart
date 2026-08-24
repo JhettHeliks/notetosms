@@ -107,4 +107,28 @@ class VaultService {
   }) async {
     return rust_api.searchNotes(query: query, roomIdFilter: roomIdFilter);
   }
+
+  // -------------------------------------------------------------------------
+  // P2P Shared Notes & Sync
+  // -------------------------------------------------------------------------
+
+  Future<String> startP2PNode() async {
+    return rust_api.startP2PNode();
+  }
+
+  Future<String> generateRoomInvite({
+    required String roomId,
+    required String roomName,
+  }) async {
+    return rust_api.generateRoomInvite(roomId: roomId, roomName: roomName);
+  }
+
+  Future<RoomItem> joinRoomByInvite(String invitePayload) async {
+    return rust_api.joinRoomByInvite(invitePayload: invitePayload);
+  }
+
+  Stream<dynamic> subscribeP2PEvents() {
+    return rust_api.subscribeP2PEvents();
+  }
 }
+

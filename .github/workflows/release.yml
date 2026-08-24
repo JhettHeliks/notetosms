@@ -1,0 +1,120 @@
+name: Build & Release notetosms
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name (e.g. v1.0.0, v1.0.0-beta.1)'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build Android APKs & GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter SDK
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Set up Rust Toolchain & Android Targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: |
+            aarch64-linux-android
+            armv7-linux-androideabi
+            x86_64-linux-android
+            i686-linux-android
+
+      - name: Install cargo-binstall & flutter_rust_bridge_codegen
+        run: |
+          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo binstall --no-confirm flutter_rust_bridge_codegen@2.12.0
+
+      - name: Install Flutter Dependencies
+        run: flutter pub get
+
+      - name: Generate Flutter Rust Bridge Bindings
+        run: flutter_rust_bridge_codegen generate
+
+      - name: Run Rust Engine Unit Tests
+        run: cargo test --manifest-path rust/Cargo.toml
+
+      - name: Run Flutter Static Analysis & Tests
+        run: |
+          flutter analyze
+          flutter test
+
+      - name: Build Universal Release APK
+        run: flutter build apk --release
+
+      - name: Build Split-per-ABI Release APKs
+        run: flutter build apk --release --split-per-abi
+
+      - name: Build Android App Bundle (AAB)
+        run: flutter build appbundle --release
+
+      - name: Package & Generate SHA-256 Checksums
+        id: package
+        run: |
+          mkdir -p dist
+          # Copy APKs
+          cp -v build/app/outputs/flutter-apk/*.apk dist/
+          # Copy AAB if generated
+          if [ -f build/app/outputs/bundle/release/app-release.aab ]; then
+            cp -v build/app/outputs/bundle/release/app-release.aab dist/notetosms-release.aab
+          fi
+
+          # Generate Checksums
+          cd dist
+          for file in *; do
+            if [ -f "$file" ]; then
+              sha256sum "$file" > "$file.sha256"
+            fi
+          done
+          ls -la
+
+          # Determine Prerelease status from tag
+          TAG="${{ github.ref_name }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag_name }}"
+          fi
+
+          if echo "$TAG" | grep -qiE 'beta|rc|alpha|dev'; then
+            echo "IS_PRERELEASE=true" >> $GITHUB_ENV
+          else
+            echo "IS_PRERELEASE=false" >> $GITHUB_ENV
+          fi
+          echo "RELEASE_TAG=$TAG" >> $GITHUB_ENV
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: notetosms ${{ env.RELEASE_TAG }}
+          files: dist/*
+          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
+          generate_release_notes: true
+          draft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

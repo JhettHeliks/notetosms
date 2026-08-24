@@ -5,11 +5,13 @@ import 'package:notetosms/core/theme/app_theme.dart';
 class MessageInputBar extends StatefulWidget {
   final String roomName;
   final Function(String text) onSendMessage;
+  final Function(bool isTyping)? onTypingChanged;
 
   const MessageInputBar({
     super.key,
     required this.roomName,
     required this.onSendMessage,
+    this.onTypingChanged,
   });
 
   @override
@@ -29,6 +31,7 @@ class _MessageInputBarState extends State<MessageInputBar> {
       final canSend = _controller.text.trim().isNotEmpty;
       if (canSend != _canSend) {
         setState(() => _canSend = canSend);
+        widget.onTypingChanged?.call(canSend);
       }
     });
   }
@@ -46,6 +49,7 @@ class _MessageInputBarState extends State<MessageInputBar> {
     HapticFeedback.lightImpact();
     widget.onSendMessage(text);
     _controller.clear();
+    widget.onTypingChanged?.call(false);
     setState(() => _showTools = false);
   }
 

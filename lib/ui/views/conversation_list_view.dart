@@ -219,6 +219,14 @@ class _ConversationListViewState extends State<ConversationListView> {
                           SettingsDialog.showChangePassphrase(context);
                         } else if (value == 'new_room') {
                           RoomDialogs.showCreateRoom(context, _loadPreviews);
+                        } else if (value == 'join_room') {
+                          RoomDialogs.showJoinRoomDialog(
+                            context,
+                            onRoomJoined: (room) {
+                              _loadPreviews();
+                              widget.onSelectRoom(room.id);
+                            },
+                          );
                         } else if (value == 'lock') {
                           _handleLockVault();
                         }
@@ -231,6 +239,16 @@ class _ConversationListViewState extends State<ConversationListView> {
                               Icon(Icons.add_circle_outline, size: 20),
                               SizedBox(width: 10),
                               Text('New Channel'),
+                            ],
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'join_room',
+                          child: Row(
+                            children: [
+                              Icon(Icons.group_add_rounded, size: 20, color: AppTheme.tertiary),
+                              SizedBox(width: 10),
+                              Text('Join Shared Thread'),
                             ],
                           ),
                         ),
@@ -290,7 +308,7 @@ class _ConversationListViewState extends State<ConversationListView> {
                               const SizedBox(height: 12),
                               Text(
                                 _searchQuery.isNotEmpty
-                                    ? 'No conversations match "$_searchQuery"'
+                                     ? 'No conversations match "$_searchQuery"'
                                     : 'No channels yet',
                                 style: TextStyle(
                                   fontSize: 15,
@@ -444,13 +462,34 @@ class _ConversationListViewState extends State<ConversationListView> {
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => RoomDialogs.showCreateRoom(context, _loadPreviews),
-        backgroundColor: colorScheme.primary,
-        foregroundColor: colorScheme.onPrimary,
-        elevation: 2,
-        icon: const Icon(Icons.edit_outlined, size: 20),
-        label: const Text('New Thread', style: TextStyle(fontWeight: FontWeight.w600)),
+      floatingActionButton: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton.small(
+            heroTag: 'join_p2p_btn',
+            tooltip: 'Join Shared Room',
+            onPressed: () => RoomDialogs.showJoinRoomDialog(
+              context,
+              onRoomJoined: (room) {
+                _loadPreviews();
+                widget.onSelectRoom(room.id);
+              },
+            ),
+            backgroundColor: colorScheme.surfaceContainerHigh,
+            foregroundColor: colorScheme.primary,
+            child: const Icon(Icons.group_add_rounded, size: 20),
+          ),
+          const SizedBox(width: 10),
+          FloatingActionButton.extended(
+            heroTag: 'new_thread_btn',
+            onPressed: () => RoomDialogs.showCreateRoom(context, _loadPreviews),
+            backgroundColor: colorScheme.primary,
+            foregroundColor: colorScheme.onPrimary,
+            elevation: 2,
+            icon: const Icon(Icons.edit_outlined, size: 20),
+            label: const Text('New Thread', style: TextStyle(fontWeight: FontWeight.w600)),
+          ),
+        ],
       ),
     );
   }

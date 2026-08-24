@@ -1,6 +1,9 @@
 use std::sync::Mutex;
 use anyhow::{anyhow, Result};
+use crate::frb_generated::StreamSink;
 
+pub use crate::p2p::P2pEvent;
+use crate::p2p::P2pNode;
 pub use crate::storage::{NoteItem, RoomItem, VaultStatus};
 use crate::storage::EncryptedStore;
 
@@ -14,11 +17,11 @@ where
     let mut guard = GLOBAL_STORE
         .lock()
         .map_err(|e| anyhow!("Store lock failed: {e}"))?;
-    
+
     let store = guard
         .as_mut()
         .ok_or_else(|| anyhow!("Vault store not initialized. Call init_vault first."))?;
-    
+
     f(store)
 }
 
@@ -82,9 +85,19 @@ pub fn change_passphrase(old_pass: String, new_pass: String) -> Result<()> {
     with_store(|store| store.change_passphrase(&old_pass, &new_pass))
 }
 
-/// Create and encrypt a new note in the specified room.
+/// Create and encrypt a new note in the specified room, and broadcast to active P2P peers if shared.
 pub fn save_note(room_id: String, content: String) -> Result<NoteItem> {
-    with_store(|store| store.save_note(&room_id, &content))
+    let note = with_store(|store| store.save_note(&room_id, &content))?;
+
+    let r_id = room_id.clone();
+    let text = content.clone();
+    tokio::spawn(async move {
+        if let Ok(node) = P2pNode::get_or_init().await {
+            let _ = node.broadcast_note(&r_id, &text, false, false).await;
+        }
+    });
+
+    Ok(note)
 }
 
 /// Update an existing note's content and re-encrypt.
@@ -92,9 +105,19 @@ pub fn update_note(note_id: String, content: String) -> Result<NoteItem> {
     with_store(|store| store.update_note(&note_id, &content))
 }
 
-/// Toggle completion status of a todo note item.
+/// Toggle completion status of a todo note item, broadcasting to active P2P peers if shared.
 pub fn toggle_todo(note_id: String, is_completed: bool) -> Result<NoteItem> {
-    with_store(|store| store.toggle_todo(&note_id, is_completed))
+    let updated = with_store(|store| store.toggle_todo(&note_id, is_completed))?;
+
+    let r_id = updated.room_id.clone();
+    let text = updated.content.clone();
+    tokio::spawn(async move {
+        if let Ok(node) = P2pNode::get_or_init().await {
+            let _ = node.broadcast_note(&r_id, &text, true, is_completed).await;
+        }
+    });
+
+    Ok(updated)
 }
 
 /// Pin or unpin a note to the top of its room.
@@ -130,4 +153,59 @@ pub fn create_room(id: String, name: String, icon: String, color: u32) -> Result
 /// Delete a room and its associated notes.
 pub fn delete_room(room_id: String) -> Result<()> {
     with_store(|store| store.delete_room(&room_id))
+}
+
+// ---------------------------------------------------------------------------
+// P2P Peer-to-Peer Synchronization APIs
+// ---------------------------------------------------------------------------
+
+/// Start or initialize the local Iroh P2P node and return its NodeId string.
+pub async fn start_p2p_node() -> Result<String> {
+    let node = P2pNode::get_or_init().await?;
+    Ok(node.node_id().to_string())
+}
+
+/// Generate a shareable invite URI / QR payload for a room with an encrypted shared key.
+pub async fn generate_room_invite(room_id: String, room_name: String) -> Result<String> {
+    let node = P2pNode::get_or_init().await?;
+    node.generate_room_invite(room_id, room_name).await
+}
+
+/// Join a shared note room using a peer's invite URI / QR payload.
+pub async fn join_room_by_invite(invite_payload: String) -> Result<RoomItem> {
+    let node = P2pNode::get_or_init().await?;
+    let payload = node.join_room_by_invite(invite_payload).await?;
+
+    let room = with_store(|store| {
+        let existing = store.list_rooms()?;
+        if let Some(r) = existing.into_iter().find(|r| r.id == payload.room_id) {
+            Ok(r)
+        } else {
+            store.create_room(&payload.room_id, &payload.room_name, "chat_bubble", 0xFF6366F1)
+        }
+    })?;
+
+    Ok(room)
+}
+
+/// Subscribe to P2P network events (peer connection, disconnection, incoming notes)
+pub async fn subscribe_p2p_events(sink: StreamSink<P2pEvent>) -> Result<()> {
+    let node = P2pNode::get_or_init().await?;
+    let mut rx = node.subscribe_events();
+
+    tokio::spawn(async move {
+        while let Ok(event) = rx.recv().await {
+            if event.event_type == "note_received" {
+                if let (Some(ref r_id), Some(ref cnt)) = (&event.room_id, &event.content) {
+                    let _ = with_store(|store| store.save_note(r_id, cnt));
+                }
+            }
+
+            if sink.add(event).is_err() {
+                break;
+            }
+        }
+    });
+
+    Ok(())
 }

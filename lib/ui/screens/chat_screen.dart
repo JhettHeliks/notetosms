@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:notetosms/core/theme/app_theme.dart';
+import 'package:notetosms/services/bubble_service.dart';
 import 'package:notetosms/services/vault_service.dart';
+import 'package:notetosms/src/rust/p2p.dart';
 import 'package:notetosms/src/rust/storage.dart';
 import 'package:notetosms/ui/dialogs/room_dialogs.dart';
 import 'package:notetosms/ui/dialogs/settings_dialog.dart';
@@ -8,6 +11,7 @@ import 'package:notetosms/ui/views/conversation_list_view.dart';
 import 'package:notetosms/ui/widgets/chat_bubble.dart';
 import 'package:notetosms/ui/widgets/date_header.dart';
 import 'package:notetosms/ui/widgets/message_input_bar.dart';
+import 'package:notetosms/ui/widgets/typing_indicator_bubble.dart';
 
 class ChatScreen extends StatefulWidget {
   final String? initialRoomId;
@@ -29,6 +33,11 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isLoading = true;
   bool _isSearching = false;
   bool _showSearchBar = false;
+  bool _isTyping = false;
+
+  // P2P State
+  StreamSubscription? _p2pSubscription;
+  final Set<String> _activePeersInCurrentRoom = {};
 
   @override
   void initState() {
@@ -37,13 +46,51 @@ class _ChatScreenState extends State<ChatScreen> {
       _currentRoomId = widget.initialRoomId!;
     }
     _loadInitialData();
+    _initP2p();
   }
 
   @override
   void dispose() {
+    _p2pSubscription?.cancel();
     _scrollController.dispose();
     _searchController.dispose();
     super.dispose();
+  }
+
+  Future<void> _initP2p() async {
+    try {
+      await VaultService.instance.startP2PNode();
+      _p2pSubscription = VaultService.instance.subscribeP2PEvents().listen((event) {
+        if (event is P2pEvent) {
+          _handleP2pEvent(event);
+        }
+      });
+    } catch (e) {
+      debugPrint('P2P initialization note: $e');
+    }
+  }
+
+  void _handleP2pEvent(P2pEvent event) {
+    if (!mounted) return;
+
+    if (event.eventType == 'peer_connected') {
+      if (event.roomId == _currentRoomId && event.peerId != null) {
+        setState(() {
+          _activePeersInCurrentRoom.add(event.peerId!);
+        });
+        _showSnackBar('Peer connected to #${_currentRoom?.name ?? _currentRoomId}');
+      }
+    } else if (event.eventType == 'peer_disconnected') {
+      if (event.roomId == _currentRoomId && event.peerId != null) {
+        setState(() {
+          _activePeersInCurrentRoom.remove(event.peerId!);
+        });
+      }
+    } else if (event.eventType == 'note_received') {
+      if (event.roomId == _currentRoomId) {
+        _loadNotesForCurrentRoom();
+      }
+    }
   }
 
   Future<void> _loadInitialData() async {
@@ -251,7 +298,10 @@ class _ChatScreenState extends State<ChatScreen> {
                 isMasterDetail: true,
                 onSelectRoom: (roomId) {
                   if (_currentRoomId != roomId) {
-                    setState(() => _currentRoomId = roomId);
+                    setState(() {
+                      _currentRoomId = roomId;
+                      _activePeersInCurrentRoom.clear();
+                    });
                     _loadNotesForCurrentRoom();
                   }
                 },
@@ -276,6 +326,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _buildChatDetail({required bool showBackButton}) {
     final colorScheme = Theme.of(context).colorScheme;
     final currentRoom = _currentRoom;
+    final hasConnectedPeers = _activePeersInCurrentRoom.isNotEmpty;
 
     return Scaffold(
       backgroundColor: colorScheme.surface,
@@ -328,12 +379,35 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                     ],
                   ),
-                  Text(
-                    '${_notes.length} note${_notes.length == 1 ? '' : 's'} • End-to-end encrypted',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: colorScheme.onSurfaceVariant,
-                    ),
+                  Row(
+                    children: [
+                      if (hasConnectedPeers) ...[
+                        Container(
+                          width: 7,
+                          height: 7,
+                          decoration: const BoxDecoration(
+                            color: Colors.greenAccent,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          'Peer Connected • ',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: Colors.greenAccent.shade400,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                      Text(
+                        '${_notes.length} note${_notes.length == 1 ? '' : 's'} • E2E Encrypted',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -354,18 +428,41 @@ class _ChatScreenState extends State<ChatScreen> {
               });
             },
           ),
-          IconButton(
-            icon: const Icon(Icons.info_outline_rounded),
-            tooltip: 'Security Specs',
-            onPressed: () => SettingsDialog.showSecurityInfo(context),
-          ),
-          if (currentRoom != null && currentRoom.id != 'general')
-            PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-              color: colorScheme.surfaceContainerHigh,
-              onSelected: (value) {
-                if (value == 'delete') {
+          if (currentRoom != null)
+            IconButton(
+              icon: const Icon(Icons.qr_code_2_rounded),
+              tooltip: 'Share Room via P2P',
+              onPressed: () => RoomDialogs.showShareRoomDialog(context, currentRoom),
+            ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            color: colorScheme.surfaceContainerHigh,
+            onSelected: (value) {
+              if (value == 'share') {
+                if (currentRoom != null) {
+                  RoomDialogs.showShareRoomDialog(context, currentRoom);
+                }
+              } else if (value == 'bubble') {
+                if (currentRoom != null) {
+                  BubbleService.instance
+                      .showAsBubble(
+                        roomId: currentRoom.id,
+                        roomName: currentRoom.name,
+                        icon: currentRoom.icon,
+                      )
+                      .then((success) {
+                    if (!success && mounted) {
+                      _showSnackBar('System bubbles are supported on Android 11+.');
+                    } else if (success && mounted) {
+                      _showSnackBar('Popped out #${currentRoom.name} as a floating bubble!');
+                    }
+                  });
+                }
+              } else if (value == 'security') {
+                SettingsDialog.showSecurityInfo(context);
+              } else if (value == 'delete') {
+                if (currentRoom != null) {
                   RoomDialogs.showDeleteRoom(
                     context,
                     currentRoom.id,
@@ -379,8 +476,41 @@ class _ChatScreenState extends State<ChatScreen> {
                     },
                   );
                 }
-              },
-              itemBuilder: (context) => [
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'bubble',
+                child: Row(
+                  children: [
+                    Icon(Icons.bubble_chart_rounded, size: 20, color: AppTheme.primary),
+                    SizedBox(width: 10),
+                    Text('Pop Out as Bubble'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'share',
+                child: Row(
+                  children: [
+                    Icon(Icons.qr_code_rounded, size: 20, color: AppTheme.secondary),
+                    SizedBox(width: 10),
+                    Text('Share Room via P2P'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'security',
+                child: Row(
+                  children: [
+                    Icon(Icons.shield_outlined, size: 20),
+                    SizedBox(width: 10),
+                    Text('Security Specs'),
+                  ],
+                ),
+              ),
+              if (currentRoom != null && currentRoom.id != 'general') ...[
+                const PopupMenuDivider(),
                 const PopupMenuItem(
                   value: 'delete',
                   child: Row(
@@ -392,7 +522,8 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
               ],
-            ),
+            ],
+          ),
           const SizedBox(width: 6),
         ],
       ),
@@ -449,9 +580,18 @@ class _ChatScreenState extends State<ChatScreen> {
                     ? _buildEmptyState()
                     : _buildNotesTimeline(),
           ),
+          if (_isTyping)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16.0),
+              child: TypingIndicatorBubble(label: 'Drafting note...'),
+            ),
           MessageInputBar(
             roomName: currentRoom?.name ?? _currentRoomId,
             onSendMessage: _handleSendMessage,
+            onTypingChanged: (isTyping) {
+              setState(() => _isTyping = isTyping);
+              if (isTyping) _scrollToBottom();
+            },
           ),
         ],
       ),

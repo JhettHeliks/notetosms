@@ -1,5 +1,6 @@
 package com.example.chat_notes
 
-import io.flutter.embedding.android.FlutterActivity
+import com.notetosms.app.MainActivity
 
-class MainActivity : FlutterActivity()
+// Forwarding alias for backwards-compatibility
+open class MainActivity : com.notetosms.app.MainActivity()

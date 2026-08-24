@@ -4,6 +4,7 @@
 // ignore_for_file: invalid_use_of_internal_member, unused_import, unnecessary_import
 
 import '../frb_generated.dart';
+import '../p2p.dart';
 import '../storage.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
@@ -38,7 +39,7 @@ Future<void> changePassphrase({
   newPass: newPass,
 );
 
-/// Create and encrypt a new note in the specified room.
+/// Create and encrypt a new note in the specified room, and broadcast to active P2P peers if shared.
 Future<NoteItem> saveNote({required String roomId, required String content}) =>
     RustLib.instance.api.crateApiNotesSaveNote(
       roomId: roomId,
@@ -54,7 +55,7 @@ Future<NoteItem> updateNote({
   content: content,
 );
 
-/// Toggle completion status of a todo note item.
+/// Toggle completion status of a todo note item, broadcasting to active P2P peers if shared.
 Future<NoteItem> toggleTodo({
   required String noteId,
   required bool isCompleted,
@@ -107,3 +108,26 @@ Future<RoomItem> createRoom({
 /// Delete a room and its associated notes.
 Future<void> deleteRoom({required String roomId}) =>
     RustLib.instance.api.crateApiNotesDeleteRoom(roomId: roomId);
+
+/// Start or initialize the local Iroh P2P node and return its NodeId string.
+Future<String> startP2PNode() =>
+    RustLib.instance.api.crateApiNotesStartP2PNode();
+
+/// Generate a shareable invite URI / QR payload for a room with an encrypted shared key.
+Future<String> generateRoomInvite({
+  required String roomId,
+  required String roomName,
+}) => RustLib.instance.api.crateApiNotesGenerateRoomInvite(
+  roomId: roomId,
+  roomName: roomName,
+);
+
+/// Join a shared note room using a peer's invite URI / QR payload.
+Future<RoomItem> joinRoomByInvite({required String invitePayload}) => RustLib
+    .instance
+    .api
+    .crateApiNotesJoinRoomByInvite(invitePayload: invitePayload);
+
+/// Subscribe to P2P network events (peer connection, disconnection, incoming notes)
+Stream<P2pEvent> subscribeP2PEvents() =>
+    RustLib.instance.api.crateApiNotesSubscribeP2PEvents();
