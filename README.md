@@ -1,4 +1,4 @@
-# chat_notes
+# notetosms
 
 A new Flutter project.
 
