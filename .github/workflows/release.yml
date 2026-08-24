@@ -31,6 +31,12 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Set up Android NDK (r26b)
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26b
+          link-to-sdk: true
+
       - name: Set up Flutter SDK
         uses: subosito/flutter-action@v2
         with:
@@ -46,9 +52,10 @@ jobs:
             x86_64-linux-android
             i686-linux-android
 
-      - name: Install cargo-binstall & flutter_rust_bridge_codegen
+      - name: Install cargo-ndk & flutter_rust_bridge_codegen
         run: |
           curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo binstall --no-confirm cargo-ndk
           cargo binstall --no-confirm flutter_rust_bridge_codegen@2.12.0
 
       - name: Install Flutter Dependencies
@@ -78,14 +85,15 @@ jobs:
         id: package
         run: |
           mkdir -p dist
-          # Copy APKs
+          # Copy all generated APKs
           cp -v build/app/outputs/flutter-apk/*.apk dist/
+          
           # Copy AAB if generated
           if [ -f build/app/outputs/bundle/release/app-release.aab ]; then
             cp -v build/app/outputs/bundle/release/app-release.aab dist/notetosms-release.aab
           fi
 
-          # Generate Checksums
+          # Generate Checksums for all release artifacts
           cd dist
           for file in *; do
             if [ -f "$file" ]; then
