@@ -34,6 +34,10 @@ android {
         }
     }
 
+    androidResources {
+        ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~:!desktop.ini:!Desktop.ini"
+    }
+
     applicationVariants.all {
         val variant = this
         variant.outputs.all {

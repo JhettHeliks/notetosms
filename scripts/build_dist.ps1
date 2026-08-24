@@ -34,6 +34,9 @@ if (!(Test-Path $DestDir)) {
     New-Item -ItemType Directory -Path $DestDir -Force | Out-Null
 }
 
+# Purge any hidden Windows desktop.ini files in the project (especially android/app/src/main/res/)
+Get-ChildItem -Path $ProjectRoot -Filter "desktop.ini" -Recurse -Force -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+
 # 1. Clean if requested
 if ($Clean) {
     Write-Host "[1/4] Cleaning previous build artifacts..." -ForegroundColor Yellow
