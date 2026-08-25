@@ -35,9 +35,11 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isLoading = true;
   bool _isSearching = false;
   bool _showSearchBar = false;
-  bool _isTyping = false;
 
-  // P2P State
+  // P2P & Remote Peer Typing State
+  String? _localNodeId;
+  String? _remoteTypingPeerId;
+  Timer? _remoteTypingTimer;
   StreamSubscription? _p2pSubscription;
   final Set<String> _activePeersInCurrentRoom = {};
 
@@ -69,6 +71,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _p2pSubscription?.cancel();
+    _remoteTypingTimer?.cancel();
     _scrollController.dispose();
     _searchController.dispose();
     super.dispose();
@@ -76,7 +79,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _initP2p() async {
     try {
-      await VaultService.instance.startP2PNode();
+      final nodeId = await VaultService.instance.startP2PNode();
+      _localNodeId = nodeId;
       _p2pSubscription = VaultService.instance.subscribeP2PEvents().listen((event) {
         if (event is P2pEvent) {
           _handleP2pEvent(event);
@@ -90,7 +94,11 @@ class _ChatScreenState extends State<ChatScreen> {
   void _handleP2pEvent(P2pEvent event) {
     if (!mounted) return;
 
-    if (event.eventType == 'peer_connected') {
+    if (event.eventType == 'node_started') {
+      if (event.peerId != null) {
+        _localNodeId = event.peerId;
+      }
+    } else if (event.eventType == 'peer_connected') {
       if (event.roomId == _currentRoomId && event.peerId != null) {
         setState(() {
           _activePeersInCurrentRoom.add(event.peerId!);
@@ -101,10 +109,31 @@ class _ChatScreenState extends State<ChatScreen> {
       if (event.roomId == _currentRoomId && event.peerId != null) {
         setState(() {
           _activePeersInCurrentRoom.remove(event.peerId!);
+          if (_remoteTypingPeerId == event.peerId) {
+            _remoteTypingPeerId = null;
+            _remoteTypingTimer?.cancel();
+          }
+        });
+      }
+    } else if (event.eventType == 'typing' || event.eventType == 'peer_typing') {
+      if (event.roomId == _currentRoomId &&
+          event.peerId != null &&
+          event.peerId != _localNodeId &&
+          _activePeersInCurrentRoom.contains(event.peerId)) {
+        setState(() {
+          _remoteTypingPeerId = event.peerId;
+        });
+        _remoteTypingTimer?.cancel();
+        _remoteTypingTimer = Timer(const Duration(seconds: 3), () {
+          if (mounted) setState(() => _remoteTypingPeerId = null);
         });
       }
     } else if (event.eventType == 'note_received') {
       if (event.roomId == _currentRoomId) {
+        if (event.authorId != null && event.authorId == _remoteTypingPeerId) {
+          _remoteTypingTimer?.cancel();
+          setState(() => _remoteTypingPeerId = null);
+        }
         _loadNotesForCurrentRoom();
       }
     }
@@ -318,6 +347,8 @@ class _ChatScreenState extends State<ChatScreen> {
                     setState(() {
                       _currentRoomId = roomId;
                       _activePeersInCurrentRoom.clear();
+                      _remoteTypingPeerId = null;
+                      _remoteTypingTimer?.cancel();
                     });
                     _loadNotesForCurrentRoom();
                   }
@@ -627,16 +658,15 @@ class _ChatScreenState extends State<ChatScreen> {
                     ? _buildEmptyState()
                     : _buildNotesTimeline(),
           ),
-          if (_isTyping)
+          if (_remoteTypingPeerId != null && _activePeersInCurrentRoom.isNotEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 16.0),
-              child: TypingIndicatorBubble(label: 'Drafting note...'),
+              child: TypingIndicatorBubble(label: 'Peer is drafting note...'),
             ),
           MessageInputBar(
             roomName: currentRoom?.name ?? _currentRoomId,
             onSendMessage: _handleSendMessage,
             onTypingChanged: (isTyping) {
-              setState(() => _isTyping = isTyping);
               if (isTyping) _scrollToBottom();
             },
           ),

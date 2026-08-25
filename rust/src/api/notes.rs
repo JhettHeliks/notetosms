@@ -91,7 +91,7 @@ pub fn save_note(room_id: String, content: String) -> Result<NoteItem> {
 
     let r_id = room_id.clone();
     let text = content.clone();
-    tokio::spawn(async move {
+    crate::get_runtime().spawn(async move {
         if let Ok(node) = P2pNode::get_or_init().await {
             let _ = node.broadcast_note(&r_id, &text, false, false).await;
         }
@@ -111,7 +111,7 @@ pub fn toggle_todo(note_id: String, is_completed: bool) -> Result<NoteItem> {
 
     let r_id = updated.room_id.clone();
     let text = updated.content.clone();
-    tokio::spawn(async move {
+    crate::get_runtime().spawn(async move {
         if let Ok(node) = P2pNode::get_or_init().await {
             let _ = node.broadcast_note(&r_id, &text, true, is_completed).await;
         }
@@ -176,51 +176,63 @@ pub fn import_room_invite(invite_data: String) -> Result<RoomItem> {
 
 /// Start or initialize the local Iroh P2P node and return its NodeId string.
 pub async fn start_p2p_node() -> Result<String> {
-    let node = P2pNode::get_or_init().await?;
-    Ok(node.node_id().to_string())
+    let handle = crate::get_runtime().spawn(async move {
+        let node = P2pNode::get_or_init().await?;
+        Ok::<String, anyhow::Error>(node.node_id().to_string())
+    });
+    handle.await?
 }
 
 /// Generate a shareable invite URI / QR payload for a room with an encrypted shared key.
 pub async fn generate_room_invite(room_id: String, room_name: String) -> Result<String> {
-    let node = P2pNode::get_or_init().await?;
-    node.generate_room_invite(room_id, room_name).await
+    let handle = crate::get_runtime().spawn(async move {
+        let node = P2pNode::get_or_init().await?;
+        node.generate_room_invite(room_id, room_name).await
+    });
+    handle.await?
 }
 
 /// Join a shared note room using a peer's invite URI / QR payload.
 pub async fn join_room_by_invite(invite_payload: String) -> Result<RoomItem> {
-    let node = P2pNode::get_or_init().await?;
-    let payload = node.join_room_by_invite(invite_payload).await?;
+    let handle = crate::get_runtime().spawn(async move {
+        let node = P2pNode::get_or_init().await?;
+        let payload = node.join_room_by_invite(invite_payload).await?;
 
-    let room = with_store(|store| {
-        let existing = store.list_rooms()?;
-        if let Some(r) = existing.into_iter().find(|r| r.id == payload.room_id) {
-            Ok(r)
-        } else {
-            store.create_room(&payload.room_id, &payload.room_name, "chat_bubble", 0xFF6366F1)
-        }
-    })?;
+        let room = with_store(|store| {
+            let existing = store.list_rooms()?;
+            if let Some(r) = existing.into_iter().find(|r| r.id == payload.room_id) {
+                Ok(r)
+            } else {
+                store.create_room(&payload.room_id, &payload.room_name, "chat_bubble", 0xFF6366F1)
+            }
+        })?;
 
-    Ok(room)
+        Ok::<RoomItem, anyhow::Error>(room)
+    });
+    handle.await?
 }
 
 /// Subscribe to P2P network events (peer connection, disconnection, incoming notes)
 pub async fn subscribe_p2p_events(sink: StreamSink<P2pEvent>) -> Result<()> {
-    let node = P2pNode::get_or_init().await?;
-    let mut rx = node.subscribe_events();
+    let handle = crate::get_runtime().spawn(async move {
+        let node = P2pNode::get_or_init().await?;
+        let mut rx = node.subscribe_events();
 
-    tokio::spawn(async move {
-        while let Ok(event) = rx.recv().await {
-            if event.event_type == "note_received" {
-                if let (Some(ref r_id), Some(ref cnt)) = (&event.room_id, &event.content) {
-                    let _ = with_store(|store| store.save_note(r_id, cnt));
+        crate::get_runtime().spawn(async move {
+            while let Ok(event) = rx.recv().await {
+                if event.event_type == "note_received" {
+                    if let (Some(ref r_id), Some(ref cnt)) = (&event.room_id, &event.content) {
+                        let _ = with_store(|store| store.save_note(r_id, cnt));
+                    }
+                }
+
+                if sink.add(event).is_err() {
+                    break;
                 }
             }
+        });
 
-            if sink.add(event).is_err() {
-                break;
-            }
-        }
+        Ok::<(), anyhow::Error>(())
     });
-
-    Ok(())
+    handle.await?
 }

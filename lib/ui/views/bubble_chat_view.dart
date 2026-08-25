@@ -8,7 +8,6 @@ import 'package:notetosms/src/rust/storage.dart';
 import 'package:notetosms/ui/widgets/chat_bubble.dart';
 import 'package:notetosms/ui/widgets/date_header.dart';
 import 'package:notetosms/ui/widgets/message_input_bar.dart';
-import 'package:notetosms/ui/widgets/typing_indicator_bubble.dart';
 
 class BubbleChatView extends StatefulWidget {
   final String roomId;
@@ -26,7 +25,6 @@ class _BubbleChatViewState extends State<BubbleChatView> {
   bool _isVaultUnlocked = false;
   bool _isLoading = true;
   bool _isUnlocking = false;
-  bool _isTyping = false;
   String? _unlockError;
 
   RoomItem? _room;
@@ -408,16 +406,10 @@ class _BubbleChatViewState extends State<BubbleChatView> {
                   },
                 ),
         ),
-        if (_isTyping)
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 14.0),
-            child: TypingIndicatorBubble(label: 'Drafting note...'),
-          ),
         MessageInputBar(
           roomName: _room?.name ?? widget.roomId,
           onSendMessage: _handleSendMessage,
           onTypingChanged: (isTyping) {
-            setState(() => _isTyping = isTyping);
             if (isTyping) _scrollToBottom();
           },
         ),

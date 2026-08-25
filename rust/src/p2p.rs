@@ -189,7 +189,7 @@ impl P2pNode {
         };
 
         let listener_node = node.clone();
-        tokio::spawn(async move {
+        crate::get_runtime().spawn(async move {
             listener_node.run_listener_loop().await;
         });
 
@@ -211,7 +211,7 @@ impl P2pNode {
     async fn run_listener_loop(&self) {
         while let Some(incoming) = self.endpoint.accept().await {
             let node = self.clone();
-            tokio::spawn(async move {
+            crate::get_runtime().spawn(async move {
                 if let Err(e) = node.handle_incoming_connection(incoming).await {
                     let _ = node.event_sender.send(P2pEvent::sync_error(format!("Incoming connection error: {:#}", e)));
                 }
@@ -264,7 +264,7 @@ impl P2pNode {
 
                 let stream_node = self.clone();
                 let stream_room_id = room_id.clone();
-                tokio::spawn(async move {
+                crate::get_runtime().spawn(async move {
                     if let Err(e) = stream_node.process_incoming_streams(connection, stream_room_id, peer_node_id).await {
                         let _ = stream_node.event_sender.send(P2pEvent::sync_error(format!("Stream loop ended: {:#}", e)));
                     }
@@ -449,7 +449,7 @@ impl P2pNode {
         let stream_node = self.clone();
         let stream_room_id = payload.room_id.clone();
         let stream_host_id = payload.host_node_id.clone();
-        tokio::spawn(async move {
+        crate::get_runtime().spawn(async move {
             let _ = stream_node
                 .process_incoming_streams(connection, stream_room_id, stream_host_id)
                 .await;
@@ -497,7 +497,7 @@ impl P2pNode {
 
         for conn in active_conns {
             let pkt = packet.clone();
-            tokio::spawn(async move {
+            crate::get_runtime().spawn(async move {
                 if let Ok((mut send, _recv)) = conn.open_bi().await {
                     let _ = write_packet(&mut send, &pkt).await;
                 }
