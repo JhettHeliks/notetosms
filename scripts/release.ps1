@@ -73,7 +73,9 @@ if (Test-Path $ReleaseNotesFile) {
 # 4. Commit and Tag
 Write-Host "[4/5] Creating commit and tag $TagName..." -ForegroundColor Yellow
 git commit -m "chore(release): bump version to $TagName"
-if ($ReleaseNotes) {
+if (Test-Path $ReleaseNotesFile) {
+    git tag -f -a $TagName -F $ReleaseNotesFile
+} elseif ($ReleaseNotes) {
     git tag -f -a $TagName -m "Release $TagName" -m "$ReleaseNotes"
 } else {
     git tag -f -a $TagName -m "Release $TagName"
