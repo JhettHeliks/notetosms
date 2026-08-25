@@ -57,7 +57,7 @@ $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 # 2. Run static analysis
 Write-Host "[2/5] Running static analysis check..." -ForegroundColor Yellow
-flutter analyze lib/
+flutter analyze lib/ --no-pub
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Static analysis failed. Aborting release."
     exit $LASTEXITCODE
@@ -74,16 +74,16 @@ if (Test-Path $ReleaseNotesFile) {
 Write-Host "[4/5] Creating commit and tag $TagName..." -ForegroundColor Yellow
 git commit -m "chore(release): bump version to $TagName"
 if ($ReleaseNotes) {
-    git tag -a $TagName -m "Release $TagName" -m "$ReleaseNotes"
+    git tag -f -a $TagName -m "Release $TagName" -m "$ReleaseNotes"
 } else {
-    git tag -a $TagName -m "Release $TagName"
+    git tag -f -a $TagName -m "Release $TagName"
 }
 
 # 5. Push branch and tag to origin
 Write-Host "[5/5] Pushing to origin..." -ForegroundColor Yellow
 $CurrentBranch = git rev-parse --abbrev-ref HEAD
 git push origin $CurrentBranch
-git push origin $TagName
+git push -f origin $TagName
 
 Write-Host ""
 Write-Host "======================================================" -ForegroundColor Green

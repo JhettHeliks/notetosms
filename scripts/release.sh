@@ -63,7 +63,7 @@ rm -f "$PUBSPEC_PATH.bak"
 
 # 2. Run static analysis
 echo "[2/5] Running static analysis check..."
-flutter analyze lib/
+flutter analyze lib/ --no-pub
 
 # 3. Stage changes
 echo "[3/5] Staging pubspec.yaml and release assets..."
@@ -77,16 +77,16 @@ echo "[4/5] Creating commit and tag $TAG_NAME..."
 git commit -m "chore(release): bump version to $TAG_NAME"
 
 if [ -n "$RELEASE_NOTES" ]; then
-  git tag -a "$TAG_NAME" -m "Release $TAG_NAME" -m "$RELEASE_NOTES"
+  git tag -f -a "$TAG_NAME" -m "Release $TAG_NAME" -m "$RELEASE_NOTES"
 else
-  git tag -a "$TAG_NAME" -m "Release $TAG_NAME"
+  git tag -f -a "$TAG_NAME" -m "Release $TAG_NAME"
 fi
 
 # 5. Push branch and tag to origin
 echo "[5/5] Pushing to origin..."
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 git push origin "$CURRENT_BRANCH"
-git push origin "$TAG_NAME"
+git push -f origin "$TAG_NAME"
 
 echo ""
 echo "======================================================"
