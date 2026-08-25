@@ -110,10 +110,13 @@ class _JoinThreadDialogState extends State<JoinThreadDialog> {
     try {
       RoomItem room;
       try {
-        room = await VaultService.instance.importRoomInvite(input);
+        room = await VaultService.instance.importRoomTicket(input);
       } catch (_) {
-        // Try P2P join as fallback
-        room = await VaultService.instance.joinRoomByInvite(input);
+        try {
+          room = await VaultService.instance.importRoomInvite(input);
+        } catch (_) {
+          room = await VaultService.instance.joinRoomByInvite(input);
+        }
       }
 
       if (mounted) {

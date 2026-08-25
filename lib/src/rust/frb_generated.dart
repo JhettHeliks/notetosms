@@ -11,6 +11,7 @@ import 'frb_generated.dart';
 import 'frb_generated.io.dart'
     if (dart.library.js_interop) 'frb_generated.web.dart';
 import 'p2p.dart';
+import 'p2p_protocol.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'storage.dart';
 
@@ -69,7 +70,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => 1560544910;
+  int get rustContentHash => 216500627;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -86,6 +87,8 @@ abstract class RustLibApi extends BaseApi {
     required String newPass,
   });
 
+  Future<void> crateApiNotesConnectSyncTicket({required String ticket});
+
   Future<RoomItem> crateApiNotesCreateRoom({
     required String id,
     required String name,
@@ -97,20 +100,46 @@ abstract class RustLibApi extends BaseApi {
 
   Future<void> crateApiNotesDeleteRoom({required String roomId});
 
+  Future<void> crateApiNotesExportEncryptedBackup({
+    required String destinationPath,
+  });
+
   Future<String> crateApiNotesExportRoomInvite({required String roomId});
+
+  Future<String> crateApiNotesExportRoomTicket({required String roomId});
+
+  Future<void> crateApiNotesExportUnencryptedBackup({
+    required String destinationPath,
+  });
 
   Future<String> crateApiNotesGenerateRoomInvite({
     required String roomId,
     required String roomName,
   });
 
+  Future<String> crateApiNotesGenerateSyncTicket({required String roomId});
+
   Future<List<NoteItem>> crateApiNotesGetNotes({required String roomId});
+
+  Future<List<NoteItem>> crateApiNotesGetNotesForHistory({
+    required String roomId,
+    required PlatformInt64 sinceTimestamp,
+  });
+
+  Future<String> crateApiNotesGetP2PDisplayName();
 
   Future<VaultStatus> crateApiNotesGetVaultStatus();
 
   String crateApiSimpleGreet({required String name});
 
+  Future<void> crateApiNotesImportBackup({
+    required String sourcePath,
+    String? passphrase,
+  });
+
   Future<RoomItem> crateApiNotesImportRoomInvite({required String inviteData});
+
+  Future<RoomItem> crateApiNotesImportRoomTicket({required String ticket});
 
   Future<void> crateApiSimpleInitApp();
 
@@ -120,6 +149,8 @@ abstract class RustLibApi extends BaseApi {
     required String dbPath,
     required String passphrase,
   });
+
+  Future<bool> crateApiNotesIsVaultInitialized({String? dbPath});
 
   Future<RoomItem> crateApiNotesJoinRoomByInvite({
     required String invitePayload,
@@ -146,9 +177,18 @@ abstract class RustLibApi extends BaseApi {
     String? roomIdFilter,
   });
 
+  Future<void> crateApiNotesSendTypingStatus({
+    required String roomId,
+    required bool isTyping,
+  });
+
+  Future<void> crateApiNotesSetP2PDisplayName({required String displayName});
+
   Future<String> crateApiNotesStartP2PNode();
 
   Stream<P2pEvent> crateApiNotesSubscribeP2PEvents();
+
+  Stream<RoomEvent> crateApiNotesSubscribeRoomEvents({required String roomId});
 
   Future<NoteItem> crateApiNotesToggleTodo({
     required String noteId,
@@ -158,6 +198,16 @@ abstract class RustLibApi extends BaseApi {
   Future<NoteItem> crateApiNotesUpdateNote({
     required String noteId,
     required String content,
+  });
+
+  Future<NoteItem> crateApiNotesUpsertSyncedNote({
+    required String id,
+    required String roomId,
+    required String content,
+    required PlatformInt64 timestampMs,
+    required bool isTodo,
+    required bool isCompleted,
+    required bool isPinned,
   });
 }
 
@@ -205,6 +255,37 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<void> crateApiNotesConnectSyncTicket({required String ticket}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(ticket, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 2,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiNotesConnectSyncTicketConstMeta,
+        argValues: [ticket],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNotesConnectSyncTicketConstMeta =>
+      const TaskConstMeta(
+        debugName: "connect_sync_ticket",
+        argNames: ["ticket"],
+      );
+
+  @override
   Future<RoomItem> crateApiNotesCreateRoom({
     required String id,
     required String name,
@@ -222,7 +303,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 2,
+            funcId: 3,
             port: port_,
           );
         },
@@ -252,7 +333,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 3,
+            funcId: 4,
             port: port_,
           );
         },
@@ -280,7 +361,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 4,
+            funcId: 5,
             port: port_,
           );
         },
@@ -299,6 +380,39 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "delete_room", argNames: ["roomId"]);
 
   @override
+  Future<void> crateApiNotesExportEncryptedBackup({
+    required String destinationPath,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(destinationPath, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 6,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiNotesExportEncryptedBackupConstMeta,
+        argValues: [destinationPath],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNotesExportEncryptedBackupConstMeta =>
+      const TaskConstMeta(
+        debugName: "export_encrypted_backup",
+        argNames: ["destinationPath"],
+      );
+
+  @override
   Future<String> crateApiNotesExportRoomInvite({required String roomId}) {
     return handler.executeNormal(
       NormalTask(
@@ -308,7 +422,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 5,
+            funcId: 7,
             port: port_,
           );
         },
@@ -330,6 +444,70 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String> crateApiNotesExportRoomTicket({required String roomId}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(roomId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 8,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiNotesExportRoomTicketConstMeta,
+        argValues: [roomId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNotesExportRoomTicketConstMeta =>
+      const TaskConstMeta(
+        debugName: "export_room_ticket",
+        argNames: ["roomId"],
+      );
+
+  @override
+  Future<void> crateApiNotesExportUnencryptedBackup({
+    required String destinationPath,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(destinationPath, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 9,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiNotesExportUnencryptedBackupConstMeta,
+        argValues: [destinationPath],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNotesExportUnencryptedBackupConstMeta =>
+      const TaskConstMeta(
+        debugName: "export_unencrypted_backup",
+        argNames: ["destinationPath"],
+      );
+
+  @override
   Future<String> crateApiNotesGenerateRoomInvite({
     required String roomId,
     required String roomName,
@@ -343,7 +521,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 10,
             port: port_,
           );
         },
@@ -365,6 +543,37 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String> crateApiNotesGenerateSyncTicket({required String roomId}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(roomId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 11,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiNotesGenerateSyncTicketConstMeta,
+        argValues: [roomId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNotesGenerateSyncTicketConstMeta =>
+      const TaskConstMeta(
+        debugName: "generate_sync_ticket",
+        argNames: ["roomId"],
+      );
+
+  @override
   Future<List<NoteItem>> crateApiNotesGetNotes({required String roomId}) {
     return handler.executeNormal(
       NormalTask(
@@ -374,7 +583,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 12,
             port: port_,
           );
         },
@@ -393,6 +602,68 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "get_notes", argNames: ["roomId"]);
 
   @override
+  Future<List<NoteItem>> crateApiNotesGetNotesForHistory({
+    required String roomId,
+    required PlatformInt64 sinceTimestamp,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(roomId, serializer);
+          sse_encode_i_64(sinceTimestamp, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 13,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_note_item,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiNotesGetNotesForHistoryConstMeta,
+        argValues: [roomId, sinceTimestamp],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNotesGetNotesForHistoryConstMeta =>
+      const TaskConstMeta(
+        debugName: "get_notes_for_history",
+        argNames: ["roomId", "sinceTimestamp"],
+      );
+
+  @override
+  Future<String> crateApiNotesGetP2PDisplayName() {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 14,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiNotesGetP2PDisplayNameConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNotesGetP2PDisplayNameConstMeta =>
+      const TaskConstMeta(debugName: "get_p2p_display_name", argNames: []);
+
+  @override
   Future<VaultStatus> crateApiNotesGetVaultStatus() {
     return handler.executeNormal(
       NormalTask(
@@ -401,7 +672,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 15,
             port: port_,
           );
         },
@@ -426,7 +697,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(name, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 9)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 16)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -443,6 +714,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "greet", argNames: ["name"]);
 
   @override
+  Future<void> crateApiNotesImportBackup({
+    required String sourcePath,
+    String? passphrase,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(sourcePath, serializer);
+          sse_encode_opt_String(passphrase, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 17,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiNotesImportBackupConstMeta,
+        argValues: [sourcePath, passphrase],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNotesImportBackupConstMeta => const TaskConstMeta(
+    debugName: "import_backup",
+    argNames: ["sourcePath", "passphrase"],
+  );
+
+  @override
   Future<RoomItem> crateApiNotesImportRoomInvite({required String inviteData}) {
     return handler.executeNormal(
       NormalTask(
@@ -452,7 +757,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 18,
             port: port_,
           );
         },
@@ -474,6 +779,37 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<RoomItem> crateApiNotesImportRoomTicket({required String ticket}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(ticket, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 19,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_room_item,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiNotesImportRoomTicketConstMeta,
+        argValues: [ticket],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNotesImportRoomTicketConstMeta =>
+      const TaskConstMeta(
+        debugName: "import_room_ticket",
+        argNames: ["ticket"],
+      );
+
+  @override
   Future<void> crateApiSimpleInitApp() {
     return handler.executeNormal(
       NormalTask(
@@ -482,7 +818,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 20,
             port: port_,
           );
         },
@@ -510,7 +846,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 21,
             port: port_,
           );
         },
@@ -542,7 +878,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 22,
             port: port_,
           );
         },
@@ -564,6 +900,37 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<bool> crateApiNotesIsVaultInitialized({String? dbPath}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_opt_String(dbPath, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 23,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_bool,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiNotesIsVaultInitializedConstMeta,
+        argValues: [dbPath],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNotesIsVaultInitializedConstMeta =>
+      const TaskConstMeta(
+        debugName: "is_vault_initialized",
+        argNames: ["dbPath"],
+      );
+
+  @override
   Future<RoomItem> crateApiNotesJoinRoomByInvite({
     required String invitePayload,
   }) {
@@ -575,7 +942,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 24,
             port: port_,
           );
         },
@@ -605,7 +972,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 25,
             port: port_,
           );
         },
@@ -632,7 +999,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 26,
             port: port_,
           );
         },
@@ -662,7 +1029,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 27,
             port: port_,
           );
         },
@@ -697,7 +1064,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 28,
             port: port_,
           );
         },
@@ -731,7 +1098,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 29,
             port: port_,
           );
         },
@@ -765,7 +1132,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 30,
             port: port_,
           );
         },
@@ -786,6 +1153,72 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  Future<void> crateApiNotesSendTypingStatus({
+    required String roomId,
+    required bool isTyping,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(roomId, serializer);
+          sse_encode_bool(isTyping, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 31,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiNotesSendTypingStatusConstMeta,
+        argValues: [roomId, isTyping],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNotesSendTypingStatusConstMeta =>
+      const TaskConstMeta(
+        debugName: "send_typing_status",
+        argNames: ["roomId", "isTyping"],
+      );
+
+  @override
+  Future<void> crateApiNotesSetP2PDisplayName({required String displayName}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(displayName, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 32,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiNotesSetP2PDisplayNameConstMeta,
+        argValues: [displayName],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNotesSetP2PDisplayNameConstMeta =>
+      const TaskConstMeta(
+        debugName: "set_p2p_display_name",
+        argNames: ["displayName"],
+      );
+
+  @override
   Future<String> crateApiNotesStartP2PNode() {
     return handler.executeNormal(
       NormalTask(
@@ -794,7 +1227,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 33,
             port: port_,
           );
         },
@@ -824,7 +1257,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
-              funcId: 22,
+              funcId: 34,
               port: port_,
             );
           },
@@ -848,6 +1281,42 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Stream<RoomEvent> crateApiNotesSubscribeRoomEvents({required String roomId}) {
+    final sink = RustStreamSink<RoomEvent>();
+    unawaited(
+      handler.executeNormal(
+        NormalTask(
+          callFfi: (port_) {
+            final serializer = SseSerializer(generalizedFrbRustBinding);
+            sse_encode_String(roomId, serializer);
+            sse_encode_StreamSink_room_event_Sse(sink, serializer);
+            pdeCallFfi(
+              generalizedFrbRustBinding,
+              serializer,
+              funcId: 35,
+              port: port_,
+            );
+          },
+          codec: SseCodec(
+            decodeSuccessData: sse_decode_unit,
+            decodeErrorData: sse_decode_AnyhowException,
+          ),
+          constMeta: kCrateApiNotesSubscribeRoomEventsConstMeta,
+          argValues: [roomId, sink],
+          apiImpl: this,
+        ),
+      ),
+    );
+    return sink.stream;
+  }
+
+  TaskConstMeta get kCrateApiNotesSubscribeRoomEventsConstMeta =>
+      const TaskConstMeta(
+        debugName: "subscribe_room_events",
+        argNames: ["roomId", "sink"],
+      );
+
+  @override
   Future<NoteItem> crateApiNotesToggleTodo({
     required String noteId,
     required bool isCompleted,
@@ -861,7 +1330,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 36,
             port: port_,
           );
         },
@@ -895,7 +1364,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 37,
             port: port_,
           );
         },
@@ -915,6 +1384,67 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     argNames: ["noteId", "content"],
   );
 
+  @override
+  Future<NoteItem> crateApiNotesUpsertSyncedNote({
+    required String id,
+    required String roomId,
+    required String content,
+    required PlatformInt64 timestampMs,
+    required bool isTodo,
+    required bool isCompleted,
+    required bool isPinned,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(id, serializer);
+          sse_encode_String(roomId, serializer);
+          sse_encode_String(content, serializer);
+          sse_encode_i_64(timestampMs, serializer);
+          sse_encode_bool(isTodo, serializer);
+          sse_encode_bool(isCompleted, serializer);
+          sse_encode_bool(isPinned, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 38,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_note_item,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+        constMeta: kCrateApiNotesUpsertSyncedNoteConstMeta,
+        argValues: [
+          id,
+          roomId,
+          content,
+          timestampMs,
+          isTodo,
+          isCompleted,
+          isPinned,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiNotesUpsertSyncedNoteConstMeta =>
+      const TaskConstMeta(
+        debugName: "upsert_synced_note",
+        argNames: [
+          "id",
+          "roomId",
+          "content",
+          "timestampMs",
+          "isTodo",
+          "isCompleted",
+          "isPinned",
+        ],
+      );
+
   @protected
   AnyhowException dco_decode_AnyhowException(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
@@ -923,6 +1453,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   RustStreamSink<P2pEvent> dco_decode_StreamSink_p_2_p_event_Sse(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    throw UnimplementedError();
+  }
+
+  @protected
+  RustStreamSink<RoomEvent> dco_decode_StreamSink_room_event_Sse(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     throw UnimplementedError();
   }
@@ -949,6 +1485,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return dco_decode_i_64(raw);
+  }
+
+  @protected
+  NoteItem dco_decode_box_autoadd_note_item(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_note_item(raw);
   }
 
   @protected
@@ -1024,6 +1566,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  NoteItem? dco_decode_opt_box_autoadd_note_item(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_note_item(raw);
+  }
+
+  @protected
   P2pEvent dco_decode_p_2_p_event(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -1040,6 +1588,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       isTodo: dco_decode_opt_box_autoadd_bool(arr[7]),
       isCompleted: dco_decode_opt_box_autoadd_bool(arr[8]),
       message: dco_decode_opt_String(arr[9]),
+    );
+  }
+
+  @protected
+  RoomEvent dco_decode_room_event(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 8)
+      throw Exception('unexpected arr length: expect 8 but see ${arr.length}');
+    return RoomEvent(
+      eventType: dco_decode_String(arr[0]),
+      roomId: dco_decode_String(arr[1]),
+      note: dco_decode_opt_box_autoadd_note_item(arr[2]),
+      peerId: dco_decode_opt_String(arr[3]),
+      displayName: dco_decode_opt_String(arr[4]),
+      isTyping: dco_decode_opt_box_autoadd_bool(arr[5]),
+      totalMembers: dco_decode_i_32(arr[6]),
+      activeOnline: dco_decode_i_32(arr[7]),
     );
   }
 
@@ -1123,6 +1689,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  RustStreamSink<RoomEvent> sse_decode_StreamSink_room_event_Sse(
+    SseDeserializer deserializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    throw UnimplementedError('Unreachable ()');
+  }
+
+  @protected
   String sse_decode_String(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var inner = sse_decode_list_prim_u_8_strict(deserializer);
@@ -1145,6 +1719,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_i_64(deserializer));
+  }
+
+  @protected
+  NoteItem sse_decode_box_autoadd_note_item(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_note_item(deserializer));
   }
 
   @protected
@@ -1259,6 +1839,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  NoteItem? sse_decode_opt_box_autoadd_note_item(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_note_item(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
   P2pEvent sse_decode_p_2_p_event(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_eventType = sse_decode_String(deserializer);
@@ -1282,6 +1873,29 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       isTodo: var_isTodo,
       isCompleted: var_isCompleted,
       message: var_message,
+    );
+  }
+
+  @protected
+  RoomEvent sse_decode_room_event(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_eventType = sse_decode_String(deserializer);
+    var var_roomId = sse_decode_String(deserializer);
+    var var_note = sse_decode_opt_box_autoadd_note_item(deserializer);
+    var var_peerId = sse_decode_opt_String(deserializer);
+    var var_displayName = sse_decode_opt_String(deserializer);
+    var var_isTyping = sse_decode_opt_box_autoadd_bool(deserializer);
+    var var_totalMembers = sse_decode_i_32(deserializer);
+    var var_activeOnline = sse_decode_i_32(deserializer);
+    return RoomEvent(
+      eventType: var_eventType,
+      roomId: var_roomId,
+      note: var_note,
+      peerId: var_peerId,
+      displayName: var_displayName,
+      isTyping: var_isTyping,
+      totalMembers: var_totalMembers,
+      activeOnline: var_activeOnline,
     );
   }
 
@@ -1382,6 +1996,23 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_StreamSink_room_event_Sse(
+    RustStreamSink<RoomEvent> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(
+      self.setupAndSerialize(
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_room_event,
+          decodeErrorData: sse_decode_AnyhowException,
+        ),
+      ),
+      serializer,
+    );
+  }
+
+  @protected
   void sse_encode_String(String self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(utf8.encoder.convert(self), serializer);
@@ -1406,6 +2037,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_64(self, serializer);
+  }
+
+  @protected
+  void sse_encode_box_autoadd_note_item(
+    NoteItem self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_note_item(self, serializer);
   }
 
   @protected
@@ -1510,6 +2150,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_opt_box_autoadd_note_item(
+    NoteItem? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_note_item(self, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_p_2_p_event(P2pEvent self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.eventType, serializer);
@@ -1522,6 +2175,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_opt_box_autoadd_bool(self.isTodo, serializer);
     sse_encode_opt_box_autoadd_bool(self.isCompleted, serializer);
     sse_encode_opt_String(self.message, serializer);
+  }
+
+  @protected
+  void sse_encode_room_event(RoomEvent self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.eventType, serializer);
+    sse_encode_String(self.roomId, serializer);
+    sse_encode_opt_box_autoadd_note_item(self.note, serializer);
+    sse_encode_opt_String(self.peerId, serializer);
+    sse_encode_opt_String(self.displayName, serializer);
+    sse_encode_opt_box_autoadd_bool(self.isTyping, serializer);
+    sse_encode_i_32(self.totalMembers, serializer);
+    sse_encode_i_32(self.activeOnline, serializer);
   }
 
   @protected

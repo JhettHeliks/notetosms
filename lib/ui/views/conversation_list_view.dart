@@ -4,11 +4,12 @@ import 'package:notetosms/core/theme/app_theme.dart';
 import 'package:notetosms/services/update_service.dart';
 import 'package:notetosms/services/vault_service.dart';
 import 'package:notetosms/src/rust/storage.dart';
+import 'package:notetosms/ui/dialogs/backup_restore_dialog.dart';
 import 'package:notetosms/ui/dialogs/room_dialogs.dart';
 import 'package:notetosms/ui/dialogs/settings_dialog.dart';
 import 'package:notetosms/ui/dialogs/update_dialog.dart';
 import 'package:notetosms/ui/dialogs/version_history_dialog.dart';
-import 'package:notetosms/ui/screens/lock_screen.dart';
+import 'package:notetosms/ui/screens/unlock_vault_screen.dart';
 
 class RoomPreview {
   final RoomItem room;
@@ -108,7 +109,7 @@ class _ConversationListViewState extends State<ConversationListView> {
     if (mounted) {
       Navigator.of(context).pushReplacement(
         PageRouteBuilder(
-          pageBuilder: (context, animation, secondaryAnimation) => const LockScreen(),
+          pageBuilder: (context, animation, secondaryAnimation) => const UnlockVaultScreen(),
           transitionsBuilder: (context, animation, secondaryAnimation, child) {
             return FadeTransition(opacity: animation, child: child);
           },
@@ -246,6 +247,11 @@ class _ConversationListViewState extends State<ConversationListView> {
                               widget.onSelectRoom(room.id);
                             },
                           );
+                        } else if (value == 'backup_restore') {
+                          BackupRestoreDialog.show(
+                            context,
+                            onRestoreComplete: _loadPreviews,
+                          );
                         } else if (value == 'security') {
                           SettingsDialog.showSecurityInfo(context);
                         } else if (value == 'check_updates') {
@@ -272,6 +278,16 @@ class _ConversationListViewState extends State<ConversationListView> {
                               Icon(Icons.group_add_rounded, size: 20, color: AppTheme.tertiary),
                               SizedBox(width: 10),
                               Text('Join Shared Thread'),
+                            ],
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'backup_restore',
+                          child: Row(
+                            children: [
+                              Icon(Icons.backup_rounded, size: 20, color: AppTheme.tertiary),
+                              SizedBox(width: 10),
+                              Text('Backup & Restore'),
                             ],
                           ),
                         ),

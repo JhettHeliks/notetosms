@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, Context, Result};
 use base64::Engine;
 use rand::RngCore;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use zeroize::Zeroizing;
 
 use crate::crypto::{
@@ -52,6 +52,54 @@ pub struct VaultStatus {
     pub is_initialized: bool,
     pub is_unlocked: bool,
     pub db_path: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UnencryptedBackupNote {
+    pub id: String,
+    pub room_id: String,
+    pub content: String,
+    pub timestamp_ms: i64,
+    pub is_todo: bool,
+    pub is_completed: bool,
+    pub is_pinned: bool,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UnencryptedBackup {
+    pub format: String,
+    pub version: u32,
+    pub exported_at: i64,
+    pub rooms: Vec<RoomItem>,
+    pub notes: Vec<UnencryptedBackupNote>,
+}
+
+/// Check if a database file exists on disk and has valid initialized vault metadata with salt.
+pub fn check_vault_file_initialized(path: &str) -> bool {
+    let path_obj = Path::new(path);
+    if !path_obj.exists() {
+        return false;
+    }
+    if let Ok(meta) = path_obj.metadata() {
+        if meta.len() == 0 {
+            return false;
+        }
+    }
+
+    let Ok(conn) = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return false;
+    };
+
+    let count: Result<i64, _> = conn.query_row(
+        "SELECT COUNT(*) FROM vault_metadata WHERE id = 1 AND LENGTH(salt) >= 16",
+        [],
+        |r| r.get(0),
+    );
+    matches!(count, Ok(c) if c > 0)
 }
 
 pub struct EncryptedStore {
@@ -655,6 +703,126 @@ impl EncryptedStore {
         Ok(notes)
     }
 
+    pub fn upsert_remote_note(
+        &mut self,
+        id: &str,
+        room_id: &str,
+        content: &str,
+        timestamp_ms: i64,
+        is_todo: bool,
+        is_completed: bool,
+        is_pinned: bool,
+    ) -> Result<NoteItem> {
+        let key = self.get_active_key()?;
+        let tags = extract_tags(content);
+        let tags_str = tags.join(",");
+
+        let (ciphertext, nonce) = encrypt_payload(key, content.as_bytes())?;
+
+        self.conn.execute(
+            r#"
+            INSERT INTO notes (id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ON CONFLICT(id) DO UPDATE SET
+                ciphertext = excluded.ciphertext,
+                nonce = excluded.nonce,
+                timestamp_ms = excluded.timestamp_ms,
+                is_todo = excluded.is_todo,
+                is_completed = excluded.is_completed,
+                is_pinned = excluded.is_pinned,
+                tags = excluded.tags
+            "#,
+            params![
+                id,
+                room_id,
+                ciphertext,
+                nonce.to_vec(),
+                timestamp_ms,
+                if is_todo { 1 } else { 0 },
+                if is_completed { 1 } else { 0 },
+                if is_pinned { 1 } else { 0 },
+                tags_str,
+            ],
+        )?;
+
+        // Update temporary FTS table
+        let _ = self.conn.execute("DELETE FROM temp.notes_fts WHERE id = ?1", params![id]);
+        let _ = self.conn.execute(
+            "INSERT INTO temp.notes_fts (id, room_id, content) VALUES (?1, ?2, ?3)",
+            params![id, room_id, content],
+        );
+
+        Ok(NoteItem {
+            id: id.to_string(),
+            room_id: room_id.to_string(),
+            content: content.to_string(),
+            timestamp_ms,
+            is_todo,
+            is_completed,
+            is_pinned,
+            tags,
+        })
+    }
+
+    pub fn get_notes_since(&self, room_id: &str, since_timestamp_ms: i64) -> Result<Vec<NoteItem>> {
+        let key = self.get_active_key()?;
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags
+            FROM notes
+            WHERE room_id = ?1 AND timestamp_ms >= ?2
+            ORDER BY is_pinned DESC, timestamp_ms ASC
+            "#,
+        )?;
+
+        let rows = stmt.query_map(params![room_id, since_timestamp_ms], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Vec<u8>>(2)?,
+                r.get::<_, Vec<u8>>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i32>(5)?,
+                r.get::<_, i32>(6)?,
+                r.get::<_, i32>(7)?,
+                r.get::<_, String>(8)?,
+            ))
+        })?;
+
+        let mut notes = Vec::new();
+        for row in rows {
+            let (id, r_id, cipher, nonce_vec, timestamp_ms, is_todo, is_completed, is_pinned, tags_str) = row?;
+            if nonce_vec.len() < NONCE_LEN {
+                continue;
+            }
+            let mut nonce = [0u8; NONCE_LEN];
+            nonce.copy_from_slice(&nonce_vec[..NONCE_LEN]);
+
+            if let Ok(decrypted) = decrypt_payload(key, &cipher, &nonce) {
+                if let Ok(content) = String::from_utf8(decrypted.to_vec()) {
+                    let tags = if tags_str.is_empty() {
+                        Vec::new()
+                    } else {
+                        tags_str.split(',').map(|s| s.to_string()).collect()
+                    };
+                    notes.push(NoteItem {
+                        id,
+                        room_id: r_id,
+                        content,
+                        timestamp_ms,
+                        is_todo: is_todo > 0,
+                        is_completed: is_completed > 0,
+                        is_pinned: is_pinned > 0,
+                        tags,
+                    });
+                }
+            }
+        }
+
+        Ok(notes)
+    }
+
     pub fn search_notes(&self, query: &str, room_filter: Option<&str>) -> Result<Vec<NoteItem>> {
         let key = self.get_active_key()?;
         let trimmed_query = query.trim();
@@ -845,6 +1013,35 @@ impl EncryptedStore {
         })
     }
 
+    pub fn upsert_room(&mut self, id: &str, name: &str, icon: &str, color: u32) -> Result<RoomItem> {
+        let trimmed_id = id.trim().to_lowercase().replace(' ', "-");
+        let trimmed_name = name.trim();
+
+        if trimmed_id.is_empty() || trimmed_name.is_empty() {
+            return Err(anyhow!("Room ID and Name cannot be empty"));
+        }
+
+        let now = current_time_ms();
+        let max_sort: i32 = self
+            .conn
+            .query_row("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM rooms", [], |r| r.get(0))
+            .unwrap_or(0);
+
+        self.conn.execute(
+            r#"
+            INSERT INTO rooms (id, name, icon, color, created_at, sort_order)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                icon = CASE WHEN rooms.icon IS NULL OR rooms.icon = '' THEN excluded.icon ELSE rooms.icon END,
+                color = CASE WHEN rooms.color = 0 THEN excluded.color ELSE rooms.color END
+            "#,
+            params![trimmed_id, trimmed_name, icon, color as i64, now, max_sort],
+        )?;
+
+        self.get_room(&trimmed_id)
+    }
+
     pub fn get_room(&self, room_id: &str) -> Result<RoomItem> {
         self.conn
             .query_row(
@@ -942,6 +1139,259 @@ impl EncryptedStore {
         }
 
         self.create_room(&invite.room_id, &invite.name, &invite.icon, invite.color)
+    }
+
+    /// Export a clean, consolidated encrypted SQLite backup to the specified destination path.
+    pub fn export_encrypted_backup(&self, destination_path: &str) -> Result<()> {
+        let _ = self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+
+        let dest = Path::new(destination_path);
+        if dest.exists() {
+            let _ = std::fs::remove_file(dest);
+        }
+
+        self.conn
+            .execute("VACUUM INTO ?1", params![destination_path])
+            .context("Failed to export encrypted vault backup via VACUUM INTO")?;
+
+        Ok(())
+    }
+
+    /// Export decrypted plaintext notes and room metadata as structured JSON to destination path.
+    pub fn export_unencrypted_backup(&self, destination_path: &str) -> Result<()> {
+        let key = self.get_active_key()?;
+        let rooms = self.list_rooms()?;
+
+        let mut unencrypted_notes = Vec::new();
+        let mut stmt = self.conn.prepare(
+            "SELECT id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags FROM notes ORDER BY timestamp_ms ASC"
+        )?;
+
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Vec<u8>>(2)?,
+                r.get::<_, Vec<u8>>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i32>(5)? != 0,
+                r.get::<_, i32>(6)? != 0,
+                r.get::<_, i32>(7)? != 0,
+                r.get::<_, String>(8)?,
+            ))
+        })?;
+
+        for row in rows {
+            let (id, room_id, ciphertext, nonce_vec, timestamp_ms, is_todo, is_completed, is_pinned, tags_str) = row?;
+            if nonce_vec.len() < NONCE_LEN {
+                continue;
+            }
+            let mut nonce = [0u8; NONCE_LEN];
+            nonce.copy_from_slice(&nonce_vec[..NONCE_LEN]);
+
+            let decrypted_bytes = decrypt_payload(key, &ciphertext, &nonce)?;
+            let content = String::from_utf8(decrypted_bytes.to_vec())
+                .map_err(|e| anyhow!("Corrupted UTF-8 in note {id}: {e}"))?;
+
+            let tags = if tags_str.trim().is_empty() {
+                Vec::new()
+            } else {
+                tags_str.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+            };
+
+            unencrypted_notes.push(UnencryptedBackupNote {
+                id,
+                room_id,
+                content,
+                timestamp_ms,
+                is_todo,
+                is_completed,
+                is_pinned,
+                tags,
+            });
+        }
+
+        let backup = UnencryptedBackup {
+            format: "notetosms_plaintext_backup_v1".to_string(),
+            version: 1,
+            exported_at: current_time_ms(),
+            rooms,
+            notes: unencrypted_notes,
+        };
+
+        let json_string = serde_json::to_string_pretty(&backup)?;
+        std::fs::write(destination_path, json_string.as_bytes())
+            .context("Failed to write unencrypted backup file")?;
+
+        Ok(())
+    }
+
+    /// Import a backup (either encrypted SQLite .vault or plaintext JSON) with transaction safety.
+    pub fn import_backup(&mut self, source_path: &str, passphrase: Option<String>) -> Result<()> {
+        let dest_key = self.get_active_key()?;
+
+        let file_bytes = std::fs::read(source_path)
+            .context(format!("Failed to read backup file at {source_path}"))?;
+
+        let is_sqlite = file_bytes.len() >= 16 && &file_bytes[..16] == b"SQLite format 3\0";
+
+        if is_sqlite {
+            let src_conn = Connection::open(source_path)
+                .context("Failed to open source SQLite backup database")?;
+
+            let (salt_vec, verify_ciphertext, verify_nonce_vec): (Vec<u8>, Vec<u8>, Vec<u8>) = src_conn
+                .query_row(
+                    "SELECT salt, verify_ciphertext, verify_nonce FROM vault_metadata WHERE id = 1",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .context("Failed to read vault_metadata from backup database. Is this a valid notetosms backup?")?;
+
+            if salt_vec.len() < SALT_LEN || verify_nonce_vec.len() < NONCE_LEN {
+                return Err(anyhow!("Corrupt vault metadata in backup database"));
+            }
+
+            let mut src_nonce = [0u8; NONCE_LEN];
+            src_nonce.copy_from_slice(&verify_nonce_vec[..NONCE_LEN]);
+
+            let src_key = if let Some(ref pass) = passphrase {
+                if pass.trim().is_empty() {
+                    return Err(anyhow!("Passphrase cannot be empty"));
+                }
+                let derived = derive_key(pass, &salt_vec)?;
+                let decrypted = decrypt_payload(&derived, &verify_ciphertext, &src_nonce)
+                    .map_err(|_| anyhow!("Incorrect passphrase for backup vault"))?;
+                if decrypted.as_slice() != VERIFY_MAGIC_PLAINTEXT {
+                    return Err(anyhow!("Verification magic failed for backup vault"));
+                }
+                derived
+            } else {
+                if let Ok(decrypted) = decrypt_payload(dest_key, &verify_ciphertext, &src_nonce) {
+                    if decrypted.as_slice() == VERIFY_MAGIC_PLAINTEXT {
+                        dest_key.clone()
+                    } else {
+                        return Err(anyhow!("Backup was encrypted with a different passphrase. Please provide the backup passphrase."));
+                    }
+                } else {
+                    return Err(anyhow!("Backup was encrypted with a different passphrase. Please provide the backup passphrase."));
+                }
+            };
+
+            let mut src_rooms = Vec::new();
+            {
+                let mut stmt = src_conn.prepare("SELECT id, name, icon, color, created_at, sort_order FROM rooms")?;
+                let rows = stmt.query_map([], |r| {
+                    Ok(RoomItem {
+                        id: r.get(0)?,
+                        name: r.get(1)?,
+                        icon: r.get(2)?,
+                        color: r.get::<_, i64>(3)? as u32,
+                        created_at: r.get(4)?,
+                        sort_order: r.get(5)?,
+                    })
+                })?;
+                for r in rows {
+                    src_rooms.push(r?);
+                }
+            }
+
+            let mut notes_to_import = Vec::new();
+            {
+                let mut stmt = src_conn.prepare(
+                    "SELECT id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags FROM notes"
+                )?;
+                let rows = stmt.query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Vec<u8>>(2)?,
+                        r.get::<_, Vec<u8>>(3)?,
+                        r.get::<_, i64>(4)?,
+                        r.get::<_, i32>(5)?,
+                        r.get::<_, i32>(6)?,
+                        r.get::<_, i32>(7)?,
+                        r.get::<_, String>(8)?,
+                    ))
+                })?;
+
+                for row in rows {
+                    let (id, room_id, cipher, n_vec, timestamp_ms, is_todo, is_completed, is_pinned, tags) = row?;
+                    if n_vec.len() < NONCE_LEN {
+                        continue;
+                    }
+                    let mut n = [0u8; NONCE_LEN];
+                    n.copy_from_slice(&n_vec[..NONCE_LEN]);
+
+                    let decrypted = decrypt_payload(&src_key, &cipher, &n)?;
+                    let content = String::from_utf8(decrypted.to_vec())
+                        .map_err(|e| anyhow!("Corrupt UTF-8 note content in backup: {e}"))?;
+
+                    notes_to_import.push((id, room_id, content, timestamp_ms, is_todo, is_completed, is_pinned, tags));
+                }
+            }
+
+            let current_dest_key = self.get_active_key()?.clone();
+            let tx = self.conn.transaction()?;
+
+            for room in src_rooms {
+                tx.execute(
+                    "INSERT OR IGNORE INTO rooms (id, name, icon, color, created_at, sort_order)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![room.id, room.name, room.icon, room.color as i64, room.created_at, room.sort_order],
+                )?;
+            }
+
+            for (id, room_id, content, timestamp_ms, is_todo, is_completed, is_pinned, tags) in notes_to_import {
+                let (cipher, nonce) = encrypt_payload(&current_dest_key, content.as_bytes())?;
+                tx.execute(
+                    "INSERT OR REPLACE INTO notes (id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![id, room_id, cipher, nonce.to_vec(), timestamp_ms, is_todo, is_completed, is_pinned, tags],
+                )?;
+            }
+
+            tx.commit()?;
+            self.rebuild_temp_fts()?;
+            Ok(())
+        } else {
+            let backup: UnencryptedBackup = serde_json::from_slice(&file_bytes)
+                .context("Invalid backup file: File is not an encrypted SQLite database or recognized JSON format")?;
+
+            let current_dest_key = self.get_active_key()?.clone();
+            let tx = self.conn.transaction()?;
+
+            for room in backup.rooms {
+                tx.execute(
+                    "INSERT OR IGNORE INTO rooms (id, name, icon, color, created_at, sort_order)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![room.id, room.name, room.icon, room.color as i64, room.created_at, room.sort_order],
+                )?;
+            }
+
+            for note in backup.notes {
+                let (cipher, nonce) = encrypt_payload(&current_dest_key, note.content.as_bytes())?;
+                let tags_str = note.tags.join(",");
+                tx.execute(
+                    "INSERT OR REPLACE INTO notes (id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![
+                        note.id,
+                        note.room_id,
+                        cipher,
+                        nonce.to_vec(),
+                        note.timestamp_ms,
+                        if note.is_todo { 1 } else { 0 },
+                        if note.is_completed { 1 } else { 0 },
+                        if note.is_pinned { 1 } else { 0 },
+                        tags_str
+                    ],
+                )?;
+            }
+
+            tx.commit()?;
+            self.rebuild_temp_fts()?;
+            Ok(())
+        }
     }
 }
 
@@ -1153,5 +1603,93 @@ mod tests {
         // Re-importing should return existing room idempotently
         let reimported = store_b.import_room_invite(&invite_uri).unwrap();
         assert_eq!(reimported.id, "project-alpha");
+    }
+
+    #[test]
+    fn test_encrypted_and_plaintext_backup_and_restore_roundtrip() {
+        let temp_dir = std::env::temp_dir();
+        let src_db_path = temp_dir.join(format!("test_src_{}.db", generate_random_id()));
+        let encrypted_backup_path = temp_dir.join(format!("test_backup_{}.vault", generate_random_id()));
+        let plaintext_backup_path = temp_dir.join(format!("test_backup_{}.json", generate_random_id()));
+        let dest_db_path_1 = temp_dir.join(format!("test_dest1_{}.db", generate_random_id()));
+        let dest_db_path_2 = temp_dir.join(format!("test_dest2_{}.db", generate_random_id()));
+
+        // Setup store A with data
+        let mut store_a = EncryptedStore::open(&src_db_path).unwrap();
+        store_a.unlock_or_init("vault_password_123").unwrap();
+        store_a.create_room("work", "Work Room", "work", 0xFF6366F1).unwrap();
+        let note1 = store_a.save_note("general", "General Note 1").unwrap();
+        let note2 = store_a.save_note("work", "Secret Project Plan").unwrap();
+
+        // 1. Test Encrypted Backup Export
+        store_a.export_encrypted_backup(encrypted_backup_path.to_str().unwrap()).unwrap();
+        assert!(encrypted_backup_path.exists());
+
+        // 2. Test Plaintext JSON Backup Export
+        store_a.export_unencrypted_backup(plaintext_backup_path.to_str().unwrap()).unwrap();
+        assert!(plaintext_backup_path.exists());
+
+        // 3. Restore Encrypted Backup into fresh Store B (providing backup passphrase)
+        let mut store_b = EncryptedStore::open(&dest_db_path_1).unwrap();
+        store_b.unlock_or_init("vault_password_123").unwrap();
+        store_b.import_backup(encrypted_backup_path.to_str().unwrap(), Some("vault_password_123".into())).unwrap();
+
+        let b_general_notes = store_b.get_notes("general").unwrap();
+        assert!(b_general_notes.iter().any(|n| n.id == note1.id && n.content == "General Note 1"));
+        let b_work_notes = store_b.get_notes("work").unwrap();
+        assert!(b_work_notes.iter().any(|n| n.id == note2.id && n.content == "Secret Project Plan"));
+
+        // 4. Restore Encrypted Backup into fresh Store C (different master password)
+        let mut store_c = EncryptedStore::open(&dest_db_path_2).unwrap();
+        store_c.unlock_or_init("different_master_pass_999").unwrap();
+        // Mismatched passphrase should fail when None or wrong password
+        assert!(store_c.import_backup(encrypted_backup_path.to_str().unwrap(), Some("wrong_pass".into())).is_err());
+        // Providing original backup password succeeds
+        store_c.import_backup(encrypted_backup_path.to_str().unwrap(), Some("vault_password_123".into())).unwrap();
+        let c_work_notes = store_c.get_notes("work").unwrap();
+        assert!(c_work_notes.iter().any(|n| n.id == note2.id && n.content == "Secret Project Plan"));
+
+        // 5. Restore Plaintext JSON Backup into fresh memory store
+        let mut store_d = EncryptedStore::open_in_memory().unwrap();
+        store_d.unlock_or_init("memory_pass").unwrap();
+        store_d.import_backup(plaintext_backup_path.to_str().unwrap(), None).unwrap();
+        let d_work_notes = store_d.get_notes("work").unwrap();
+        assert!(d_work_notes.iter().any(|n| n.id == note2.id && n.content == "Secret Project Plan"));
+
+        // Clean up temp files
+        let _ = std::fs::remove_file(src_db_path);
+        let _ = std::fs::remove_file(encrypted_backup_path);
+        let _ = std::fs::remove_file(plaintext_backup_path);
+        let _ = std::fs::remove_file(dest_db_path_1);
+        let _ = std::fs::remove_file(dest_db_path_2);
+    }
+
+    #[test]
+    fn test_vault_initialization_check() {
+        let temp_dir = std::env::temp_dir();
+        let db_path = temp_dir.join(format!("test_init_check_{}.db", current_time_ms()));
+        let db_path_str = db_path.to_str().unwrap();
+
+        // 1. Before file exists
+        assert!(!check_vault_file_initialized(db_path_str));
+
+        // 2. Open but not yet initialized (fresh schema only)
+        {
+            let store = EncryptedStore::open(&db_path).unwrap();
+            assert!(!store.is_vault_initialized().unwrap());
+        }
+        assert!(!check_vault_file_initialized(db_path_str));
+
+        // 3. Initialize with passphrase
+        {
+            let mut store = EncryptedStore::open(&db_path).unwrap();
+            store.unlock_or_init("master_passphrase_456").unwrap();
+            assert!(store.is_vault_initialized().unwrap());
+        }
+
+        // 4. File on disk is now initialized
+        assert!(check_vault_file_initialized(db_path_str));
+
+        let _ = std::fs::remove_file(db_path);
     }
 }

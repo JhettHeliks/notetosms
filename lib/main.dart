@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:notetosms/core/theme/app_theme.dart';
 import 'package:notetosms/src/rust/frb_generated.dart';
-import 'package:notetosms/ui/screens/lock_screen.dart';
+import 'package:notetosms/ui/screens/auth_gate.dart';
 import 'package:notetosms/ui/views/bubble_chat_view.dart';
 
 Future<void> main() async {
@@ -29,7 +29,7 @@ class NoteToSmsApp extends StatelessWidget {
             if (uri.host == 'join' || uri.path.startsWith('/join')) {
               final rawInvite = settings.name ?? uri.toString();
               return MaterialPageRoute(
-                builder: (context) => LockScreen(initialInviteData: rawInvite),
+                builder: (context) => AuthGate(initialInviteData: rawInvite),
                 settings: settings,
               );
             }
@@ -39,7 +39,7 @@ class NoteToSmsApp extends StatelessWidget {
           if (uri.path == '/join' || uri.path.startsWith('/join/')) {
             final rawInvite = settings.name ?? uri.toString();
             return MaterialPageRoute(
-              builder: (context) => LockScreen(initialInviteData: rawInvite),
+              builder: (context) => AuthGate(initialInviteData: rawInvite),
               settings: settings,
             );
           }
@@ -84,7 +84,7 @@ class NoteToSmsApp extends StatelessWidget {
 
         // Default initial home route
         return MaterialPageRoute(
-          builder: (context) => const LockScreen(),
+          builder: (context) => const AuthGate(),
           settings: settings,
         );
       },

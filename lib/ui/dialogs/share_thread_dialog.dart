@@ -4,6 +4,7 @@ import 'package:notetosms/core/theme/app_theme.dart';
 import 'package:notetosms/services/vault_service.dart';
 import 'package:notetosms/src/rust/storage.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:share_plus/share_plus.dart';
 
 class ShareThreadDialog extends StatefulWidget {
   final RoomItem room;
@@ -148,23 +149,30 @@ class _ShareThreadDialogState extends State<ShareThreadDialog> {
               children: [
                 // QR Code Container
                 Container(
-                  padding: const EdgeInsets.all(14),
+                  padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
                     color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
+                    borderRadius: BorderRadius.circular(16),
                     boxShadow: [
                       BoxShadow(
                         color: Colors.black.withValues(alpha: 0.15),
-                        blurRadius: 14,
+                        blurRadius: 16,
                         offset: const Offset(0, 4),
                       ),
                     ],
                   ),
                   child: QrImageView(
                     data: inviteData,
+                    size: 200,
                     version: QrVersions.auto,
-                    size: 190.0,
-                    backgroundColor: Colors.white,
+                    eyeStyle: const QrEyeStyle(
+                      eyeShape: QrEyeShape.square,
+                      color: Colors.black,
+                    ),
+                    dataModuleStyle: const QrDataModuleStyle(
+                      dataModuleShape: QrDataModuleShape.square,
+                      color: Colors.black,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -229,32 +237,55 @@ class _ShareThreadDialogState extends State<ShareThreadDialog> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: colorScheme.primary,
-                      foregroundColor: colorScheme.onPrimary,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                    icon: Icon(_copied ? Icons.check_rounded : Icons.copy_rounded, size: 18),
-                    label: Text(_copied ? 'Copied to Clipboard!' : 'Copy Invite Code'),
-                    onPressed: () {
-                      Clipboard.setData(ClipboardData(text: inviteData));
-                      setState(() => _copied = true);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Invite token copied to clipboard!'),
-                          duration: Duration(seconds: 2),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          side: BorderSide(color: colorScheme.outlineVariant),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                         ),
-                      );
-                      Future.delayed(const Duration(seconds: 2), () {
-                        if (mounted) setState(() => _copied = false);
-                      });
-                    },
-                  ),
+                        icon: Icon(_copied ? Icons.check_rounded : Icons.copy_rounded, size: 16),
+                        label: Text(_copied ? 'Copied' : 'Copy Code', style: const TextStyle(fontSize: 13)),
+                        onPressed: () {
+                          Clipboard.setData(ClipboardData(text: inviteData));
+                          setState(() => _copied = true);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Invite token copied to clipboard!'),
+                              duration: Duration(seconds: 2),
+                            ),
+                          );
+                          Future.delayed(const Duration(seconds: 2), () {
+                            if (mounted) setState(() => _copied = false);
+                          });
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: colorScheme.primary,
+                          foregroundColor: colorScheme.onPrimary,
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        ),
+                        icon: const Icon(Icons.share_rounded, size: 16),
+                        label: const Text('Share Link', style: TextStyle(fontSize: 13)),
+                        onPressed: () {
+                          HapticFeedback.lightImpact();
+                          Share.share(
+                            inviteData,
+                            subject: 'Join #${widget.room.name} on notetosms',
+                          );
+                        },
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),

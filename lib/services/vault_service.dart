@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:notetosms/src/rust/api/notes.dart' as rust_api;
+import 'package:notetosms/src/rust/p2p_protocol.dart';
 import 'package:notetosms/src/rust/storage.dart';
 
 class VaultService {
@@ -25,6 +26,16 @@ class VaultService {
 
   Future<VaultStatus> getStatus() async {
     return rust_api.getVaultStatus();
+  }
+
+  Future<bool> isVaultInitialized([String? customPath]) async {
+    final path = customPath ?? await getDatabasePath();
+    return rust_api.isVaultInitialized(dbPath: path);
+  }
+
+  Future<VaultStatus> unlockVault(String passphrase) async {
+    final path = await getDatabasePath();
+    return rust_api.initVaultAtPath(dbPath: path, passphrase: passphrase);
   }
 
   Future<VaultStatus> unlockOrInit(String passphrase) async {
@@ -125,11 +136,41 @@ class VaultService {
   }
 
   // -------------------------------------------------------------------------
+  // Backup & Restore
+  // -------------------------------------------------------------------------
+
+  Future<void> exportEncryptedBackup({required String destinationPath}) async {
+    await rust_api.exportEncryptedBackup(destinationPath: destinationPath);
+  }
+
+  Future<void> exportUnencryptedBackup({required String destinationPath}) async {
+    await rust_api.exportUnencryptedBackup(destinationPath: destinationPath);
+  }
+
+  Future<void> importBackup({
+    required String sourcePath,
+    String? passphrase,
+  }) async {
+    await rust_api.importBackup(
+      sourcePath: sourcePath,
+      passphrase: passphrase,
+    );
+  }
+
+  // -------------------------------------------------------------------------
   // P2P Shared Notes & Sync
   // -------------------------------------------------------------------------
 
   Future<String> startP2PNode() async {
     return rust_api.startP2PNode();
+  }
+
+  Future<String> exportRoomTicket({required String roomId}) async {
+    return rust_api.exportRoomTicket(roomId: roomId);
+  }
+
+  Future<RoomItem> importRoomTicket(String ticket) async {
+    return rust_api.importRoomTicket(ticket: ticket);
   }
 
   Future<String> generateRoomInvite({
@@ -139,12 +180,40 @@ class VaultService {
     return rust_api.generateRoomInvite(roomId: roomId, roomName: roomName);
   }
 
+  Future<String> generateSyncTicket({required String roomId}) async {
+    return rust_api.generateSyncTicket(roomId: roomId);
+  }
+
   Future<RoomItem> joinRoomByInvite(String invitePayload) async {
     return rust_api.joinRoomByInvite(invitePayload: invitePayload);
+  }
+
+  Future<void> connectSyncTicket({required String ticket}) async {
+    await rust_api.connectSyncTicket(ticket: ticket);
   }
 
   Stream<dynamic> subscribeP2PEvents() {
     return rust_api.subscribeP2PEvents();
   }
+
+  Stream<RoomEvent> subscribeRoomEvents(String roomId) {
+    return rust_api.subscribeRoomEvents(roomId: roomId);
+  }
+
+  Future<void> sendTypingStatus({
+    required String roomId,
+    required bool isTyping,
+  }) async {
+    await rust_api.sendTypingStatus(roomId: roomId, isTyping: isTyping);
+  }
+
+  Future<void> setP2PDisplayName(String displayName) async {
+    await rust_api.setP2PDisplayName(displayName: displayName);
+  }
+
+  Future<String> getP2PDisplayName() async {
+    return rust_api.getP2PDisplayName();
+  }
 }
+
 

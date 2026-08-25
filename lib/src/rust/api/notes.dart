@@ -5,10 +5,39 @@
 
 import '../frb_generated.dart';
 import '../p2p.dart';
+import '../p2p_protocol.dart';
 import '../storage.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `with_store`
+
+/// Helper called by P2P sync engine to query notes for history sync
+Future<List<NoteItem>> getNotesForHistory({
+  required String roomId,
+  required PlatformInt64 sinceTimestamp,
+}) => RustLib.instance.api.crateApiNotesGetNotesForHistory(
+  roomId: roomId,
+  sinceTimestamp: sinceTimestamp,
+);
+
+/// Helper called by P2P sync engine to upsert received notes into local encrypted SQLite store
+Future<NoteItem> upsertSyncedNote({
+  required String id,
+  required String roomId,
+  required String content,
+  required PlatformInt64 timestampMs,
+  required bool isTodo,
+  required bool isCompleted,
+  required bool isPinned,
+}) => RustLib.instance.api.crateApiNotesUpsertSyncedNote(
+  id: id,
+  roomId: roomId,
+  content: content,
+  timestampMs: timestampMs,
+  isTodo: isTodo,
+  isCompleted: isCompleted,
+  isPinned: isPinned,
+);
 
 /// Initialize or unlock vault at a specified custom database file path.
 Future<VaultStatus> initVaultAtPath({
@@ -22,6 +51,10 @@ Future<VaultStatus> initVaultAtPath({
 /// Initialize or unlock vault using default path.
 Future<void> initVault({required String passphrase}) =>
     RustLib.instance.api.crateApiNotesInitVault(passphrase: passphrase);
+
+/// Check whether the vault database exists on disk and contains a valid database header/salt.
+Future<bool> isVaultInitialized({String? dbPath}) =>
+    RustLib.instance.api.crateApiNotesIsVaultInitialized(dbPath: dbPath);
 
 /// Get the current status of the vault (initialization state, lock state, db path).
 Future<VaultStatus> getVaultStatus() =>
@@ -46,7 +79,7 @@ Future<NoteItem> saveNote({required String roomId, required String content}) =>
       content: content,
     );
 
-/// Update an existing note's content and re-encrypt.
+/// Update an existing note's content and re-encrypt, broadcasting to active P2P peers.
 Future<NoteItem> updateNote({
   required String noteId,
   required String content,
@@ -121,9 +154,46 @@ Future<RoomInvite> parseRoomInvite({required String inviteData}) =>
 Future<RoomItem> importRoomInvite({required String inviteData}) =>
     RustLib.instance.api.crateApiNotesImportRoomInvite(inviteData: inviteData);
 
+/// Export an encrypted SQLite vault database snapshot to destination path.
+Future<void> exportEncryptedBackup({required String destinationPath}) => RustLib
+    .instance
+    .api
+    .crateApiNotesExportEncryptedBackup(destinationPath: destinationPath);
+
+/// Export decrypted plaintext notes and room metadata as structured JSON to destination path.
+Future<void> exportUnencryptedBackup({required String destinationPath}) =>
+    RustLib.instance.api.crateApiNotesExportUnencryptedBackup(
+      destinationPath: destinationPath,
+    );
+
+/// Import a backup (encrypted database or plaintext JSON) with transaction safety.
+Future<void> importBackup({required String sourcePath, String? passphrase}) =>
+    RustLib.instance.api.crateApiNotesImportBackup(
+      sourcePath: sourcePath,
+      passphrase: passphrase,
+    );
+
 /// Start or initialize the local Iroh P2P node and return its NodeId string.
 Future<String> startP2PNode() =>
     RustLib.instance.api.crateApiNotesStartP2PNode();
+
+/// Set the local device display name for P2P presence.
+Future<void> setP2PDisplayName({required String displayName}) => RustLib
+    .instance
+    .api
+    .crateApiNotesSetP2PDisplayName(displayName: displayName);
+
+/// Get the local device display name.
+Future<String> getP2PDisplayName() =>
+    RustLib.instance.api.crateApiNotesGetP2PDisplayName();
+
+/// Export a combined invitation ticket containing encryption key and network dialing address.
+Future<String> exportRoomTicket({required String roomId}) =>
+    RustLib.instance.api.crateApiNotesExportRoomTicket(roomId: roomId);
+
+/// Import a combined invitation ticket, persist room in local SQLite, and dial peer.
+Future<RoomItem> importRoomTicket({required String ticket}) =>
+    RustLib.instance.api.crateApiNotesImportRoomTicket(ticket: ticket);
 
 /// Generate a shareable invite URI / QR payload for a room with an encrypted shared key.
 Future<String> generateRoomInvite({
@@ -134,12 +204,33 @@ Future<String> generateRoomInvite({
   roomName: roomName,
 );
 
+/// Generate a remote P2P sync ticket for a room using Iroh.
+Future<String> generateSyncTicket({required String roomId}) =>
+    RustLib.instance.api.crateApiNotesGenerateSyncTicket(roomId: roomId);
+
 /// Join a shared note room using a peer's invite URI / QR payload.
 Future<RoomItem> joinRoomByInvite({required String invitePayload}) => RustLib
     .instance
     .api
     .crateApiNotesJoinRoomByInvite(invitePayload: invitePayload);
 
-/// Subscribe to P2P network events (peer connection, disconnection, incoming notes)
+/// Connect to a remote peer and synchronize a room using an Iroh sync ticket.
+Future<void> connectSyncTicket({required String ticket}) =>
+    RustLib.instance.api.crateApiNotesConnectSyncTicket(ticket: ticket);
+
+/// Send live typing indicator status for a room across connected P2P peers.
+Future<void> sendTypingStatus({
+  required String roomId,
+  required bool isTyping,
+}) => RustLib.instance.api.crateApiNotesSendTypingStatus(
+  roomId: roomId,
+  isTyping: isTyping,
+);
+
+/// Subscribe to rich live room events (incoming notes, peer joins/leaves, typing, peer count)
+Stream<RoomEvent> subscribeRoomEvents({required String roomId}) =>
+    RustLib.instance.api.crateApiNotesSubscribeRoomEvents(roomId: roomId);
+
+/// Subscribe to legacy P2P network events
 Stream<P2pEvent> subscribeP2PEvents() =>
     RustLib.instance.api.crateApiNotesSubscribeP2PEvents();

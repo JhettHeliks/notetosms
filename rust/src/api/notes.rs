@@ -4,6 +4,7 @@ use crate::frb_generated::StreamSink;
 
 pub use crate::p2p::P2pEvent;
 use crate::p2p::P2pNode;
+pub use crate::p2p_protocol::RoomEvent;
 pub use crate::storage::{NoteItem, RoomInvite, RoomItem, VaultStatus};
 use crate::storage::EncryptedStore;
 
@@ -23,6 +24,34 @@ where
         .ok_or_else(|| anyhow!("Vault store not initialized. Call init_vault first."))?;
 
     f(store)
+}
+
+/// Helper called by P2P sync engine to query notes for history sync
+pub fn get_notes_for_history(room_id: &str, since_timestamp: i64) -> Result<Vec<NoteItem>> {
+    with_store(|store| store.get_notes_since(room_id, since_timestamp))
+}
+
+/// Helper called by P2P sync engine to upsert received notes into local encrypted SQLite store
+pub fn upsert_synced_note(
+    id: &str,
+    room_id: &str,
+    content: &str,
+    timestamp_ms: i64,
+    is_todo: bool,
+    is_completed: bool,
+    is_pinned: bool,
+) -> Result<NoteItem> {
+    with_store(|store| {
+        store.upsert_remote_note(
+            id,
+            room_id,
+            content,
+            timestamp_ms,
+            is_todo,
+            is_completed,
+            is_pinned,
+        )
+    })
 }
 
 /// Initialize or unlock vault at a specified custom database file path.
@@ -51,6 +80,37 @@ pub fn init_vault(passphrase: String) -> Result<()> {
     Ok(())
 }
 
+/// Check whether the vault database exists on disk and contains a valid database header/salt.
+pub fn is_vault_initialized(db_path: Option<String>) -> bool {
+    // 1. If an active store is in memory, check it first
+    if let Ok(guard) = GLOBAL_STORE.lock() {
+        if let Some(store) = guard.as_ref() {
+            if let Ok(init) = store.is_vault_initialized() {
+                if init {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // 2. Check the provided db_path if specified
+    if let Some(ref path) = db_path {
+        if !path.trim().is_empty() {
+            return crate::storage::check_vault_file_initialized(path);
+        }
+    }
+
+    // 3. Fallback to default path or chat_notes.db
+    if crate::storage::check_vault_file_initialized(DEFAULT_DB_PATH) {
+        return true;
+    }
+    if crate::storage::check_vault_file_initialized("chat_notes.db") {
+        return true;
+    }
+
+    false
+}
+
 /// Get the current status of the vault (initialization state, lock state, db path).
 pub fn get_vault_status() -> Result<VaultStatus> {
     let guard = GLOBAL_STORE
@@ -60,8 +120,10 @@ pub fn get_vault_status() -> Result<VaultStatus> {
     if let Some(store) = guard.as_ref() {
         store.get_vault_status()
     } else {
+        let is_init = crate::storage::check_vault_file_initialized(DEFAULT_DB_PATH)
+            || crate::storage::check_vault_file_initialized("chat_notes.db");
         Ok(VaultStatus {
-            is_initialized: false,
+            is_initialized: is_init,
             is_unlocked: false,
             db_path: DEFAULT_DB_PATH.to_string(),
         })
@@ -90,19 +152,29 @@ pub fn save_note(room_id: String, content: String) -> Result<NoteItem> {
     let note = with_store(|store| store.save_note(&room_id, &content))?;
 
     let r_id = room_id.clone();
-    let text = content.clone();
+    let note_clone = note.clone();
     crate::get_runtime().spawn(async move {
         if let Ok(node) = P2pNode::get_or_init().await {
-            let _ = node.broadcast_note(&r_id, &text, false, false).await;
+            let _ = node.broadcast_note_item(&r_id, &note_clone).await;
         }
     });
 
     Ok(note)
 }
 
-/// Update an existing note's content and re-encrypt.
+/// Update an existing note's content and re-encrypt, broadcasting to active P2P peers.
 pub fn update_note(note_id: String, content: String) -> Result<NoteItem> {
-    with_store(|store| store.update_note(&note_id, &content))
+    let updated = with_store(|store| store.update_note(&note_id, &content))?;
+
+    let r_id = updated.room_id.clone();
+    let note_clone = updated.clone();
+    crate::get_runtime().spawn(async move {
+        if let Ok(node) = P2pNode::get_or_init().await {
+            let _ = node.broadcast_note_item(&r_id, &note_clone).await;
+        }
+    });
+
+    Ok(updated)
 }
 
 /// Toggle completion status of a todo note item, broadcasting to active P2P peers if shared.
@@ -110,10 +182,10 @@ pub fn toggle_todo(note_id: String, is_completed: bool) -> Result<NoteItem> {
     let updated = with_store(|store| store.toggle_todo(&note_id, is_completed))?;
 
     let r_id = updated.room_id.clone();
-    let text = updated.content.clone();
+    let note_clone = updated.clone();
     crate::get_runtime().spawn(async move {
         if let Ok(node) = P2pNode::get_or_init().await {
-            let _ = node.broadcast_note(&r_id, &text, true, is_completed).await;
+            let _ = node.broadcast_note_item(&r_id, &note_clone).await;
         }
     });
 
@@ -171,6 +243,25 @@ pub fn import_room_invite(invite_data: String) -> Result<RoomItem> {
 }
 
 // ---------------------------------------------------------------------------
+// Backup & Export / Restore APIs
+// ---------------------------------------------------------------------------
+
+/// Export an encrypted SQLite vault database snapshot to destination path.
+pub fn export_encrypted_backup(destination_path: String) -> Result<()> {
+    with_store(|store| store.export_encrypted_backup(&destination_path))
+}
+
+/// Export decrypted plaintext notes and room metadata as structured JSON to destination path.
+pub fn export_unencrypted_backup(destination_path: String) -> Result<()> {
+    with_store(|store| store.export_unencrypted_backup(&destination_path))
+}
+
+/// Import a backup (encrypted database or plaintext JSON) with transaction safety.
+pub fn import_backup(source_path: String, passphrase: Option<String>) -> Result<()> {
+    with_store(|store| store.import_backup(&source_path, passphrase))
+}
+
+// ---------------------------------------------------------------------------
 // P2P Peer-to-Peer Synchronization APIs
 // ---------------------------------------------------------------------------
 
@@ -183,28 +274,57 @@ pub async fn start_p2p_node() -> Result<String> {
     handle.await?
 }
 
-/// Generate a shareable invite URI / QR payload for a room with an encrypted shared key.
-pub async fn generate_room_invite(room_id: String, room_name: String) -> Result<String> {
+/// Set the local device display name for P2P presence.
+pub async fn set_p2p_display_name(display_name: String) -> Result<()> {
     let handle = crate::get_runtime().spawn(async move {
         let node = P2pNode::get_or_init().await?;
-        node.generate_room_invite(room_id, room_name).await
+        node.set_display_name(display_name).await;
+        Ok::<(), anyhow::Error>(())
     });
     handle.await?
 }
 
-/// Join a shared note room using a peer's invite URI / QR payload.
-pub async fn join_room_by_invite(invite_payload: String) -> Result<RoomItem> {
+/// Get the local device display name.
+pub async fn get_p2p_display_name() -> Result<String> {
     let handle = crate::get_runtime().spawn(async move {
         let node = P2pNode::get_or_init().await?;
-        let payload = node.join_room_by_invite(invite_payload).await?;
+        Ok::<String, anyhow::Error>(node.get_display_name().await)
+    });
+    handle.await?
+}
+
+/// Export a combined invitation ticket containing encryption key and network dialing address.
+pub async fn export_room_ticket(room_id: String) -> Result<String> {
+    let handle = crate::get_runtime().spawn(async move {
+        let node = P2pNode::get_or_init().await?;
+        let room_name = with_store(|store| {
+            let rooms = store.list_rooms()?;
+            let name = rooms
+                .into_iter()
+                .find(|r| r.id == room_id)
+                .map(|r| r.name)
+                .unwrap_or_else(|| room_id.clone());
+            Ok(name)
+        })?;
+
+        node.export_room_ticket(room_id, room_name).await
+    });
+    handle.await?
+}
+
+/// Import a combined invitation ticket, persist room in local SQLite, and dial peer.
+pub async fn import_room_ticket(ticket: String) -> Result<RoomItem> {
+    let handle = crate::get_runtime().spawn(async move {
+        let node = P2pNode::get_or_init().await?;
+        let ticket_obj = node.import_room_ticket(ticket).await?;
 
         let room = with_store(|store| {
-            let existing = store.list_rooms()?;
-            if let Some(r) = existing.into_iter().find(|r| r.id == payload.room_id) {
-                Ok(r)
-            } else {
-                store.create_room(&payload.room_id, &payload.room_name, "chat_bubble", 0xFF6366F1)
-            }
+            store.upsert_room(
+                &ticket_obj.room_id,
+                &ticket_obj.room_name,
+                "chat_bubble",
+                0xFF6366F1,
+            )
         })?;
 
         Ok::<RoomItem, anyhow::Error>(room)
@@ -212,20 +332,71 @@ pub async fn join_room_by_invite(invite_payload: String) -> Result<RoomItem> {
     handle.await?
 }
 
-/// Subscribe to P2P network events (peer connection, disconnection, incoming notes)
-pub async fn subscribe_p2p_events(sink: StreamSink<P2pEvent>) -> Result<()> {
+/// Generate a shareable invite URI / QR payload for a room with an encrypted shared key.
+pub async fn generate_room_invite(room_id: String, _room_name: String) -> Result<String> {
+    export_room_ticket(room_id).await
+}
+
+/// Generate a remote P2P sync ticket for a room using Iroh.
+pub async fn generate_sync_ticket(room_id: String) -> Result<String> {
+    export_room_ticket(room_id).await
+}
+
+/// Join a shared note room using a peer's invite URI / QR payload.
+pub async fn join_room_by_invite(invite_payload: String) -> Result<RoomItem> {
+    import_room_ticket(invite_payload).await
+}
+
+/// Connect to a remote peer and synchronize a room using an Iroh sync ticket.
+pub async fn connect_sync_ticket(ticket: String) -> Result<()> {
+    import_room_ticket(ticket).await.map(|_| ())
+}
+
+/// Send live typing indicator status for a room across connected P2P peers.
+pub async fn send_typing_status(room_id: String, is_typing: bool) -> Result<()> {
     let handle = crate::get_runtime().spawn(async move {
         let node = P2pNode::get_or_init().await?;
-        let mut rx = node.subscribe_events();
+        node.broadcast_typing(&room_id, is_typing).await?;
+        Ok::<(), anyhow::Error>(())
+    });
+    handle.await?
+}
+
+/// Subscribe to rich live room events (incoming notes, peer joins/leaves, typing, peer count)
+pub async fn subscribe_room_events(room_id: String, sink: StreamSink<RoomEvent>) -> Result<()> {
+    let handle = crate::get_runtime().spawn(async move {
+        let node = P2pNode::get_or_init().await?;
+        let mut rx = node.subscribe_room_events(&room_id).await;
+
+        // Emit current active peer count immediately
+        let (total, online) = node.get_peer_counts(&room_id).await;
+        let _ = sink.add(RoomEvent::active_peer_count(
+            room_id.clone(),
+            total,
+            online,
+        ));
 
         crate::get_runtime().spawn(async move {
             while let Ok(event) = rx.recv().await {
-                if event.event_type == "note_received" {
-                    if let (Some(ref r_id), Some(ref cnt)) = (&event.room_id, &event.content) {
-                        let _ = with_store(|store| store.save_note(r_id, cnt));
-                    }
+                if sink.add(event).is_err() {
+                    break;
                 }
+            }
+        });
 
+        Ok::<(), anyhow::Error>(())
+    });
+    handle.await?
+}
+
+/// Subscribe to legacy P2P network events
+pub async fn subscribe_p2p_events(sink: StreamSink<P2pEvent>) -> Result<()> {
+    let handle = crate::get_runtime().spawn(async move {
+        let node = P2pNode::get_or_init().await?;
+        let mut rx = node.subscribe_legacy_events();
+
+        crate::get_runtime().spawn(async move {
+            while let Ok(event) = rx.recv().await {
                 if sink.add(event).is_err() {
                     break;
                 }

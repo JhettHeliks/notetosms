@@ -9,6 +9,8 @@ class ChatBubble extends StatelessWidget {
   final bool showRoomTag;
   final bool isPreviousInCluster;
   final bool isNextInCluster;
+  final bool isLocal;
+  final String? senderName;
   final Function(bool isCompleted) onToggleTodo;
   final Function(bool isPinned) onTogglePin;
   final Function(String newContent) onEdit;
@@ -20,6 +22,8 @@ class ChatBubble extends StatelessWidget {
     this.showRoomTag = false,
     this.isPreviousInCluster = false,
     this.isNextInCluster = false,
+    this.isLocal = true,
+    this.senderName,
     required this.onToggleTodo,
     required this.onTogglePin,
     required this.onEdit,
@@ -34,30 +38,42 @@ class ChatBubble extends StatelessWidget {
 
     final cleanContent = _getDisplayContent(note.content, note.isTodo);
 
-    final bubbleRadius = BorderRadius.only(
-      topLeft: const Radius.circular(20),
-      topRight: Radius.circular(isPreviousInCluster ? 6 : 20),
-      bottomLeft: const Radius.circular(20),
-      bottomRight: Radius.circular(isNextInCluster ? 6 : 4),
-    );
+    final bubbleRadius = isLocal
+        ? BorderRadius.only(
+            topLeft: const Radius.circular(20),
+            topRight: Radius.circular(isPreviousInCluster ? 6 : 20),
+            bottomLeft: const Radius.circular(20),
+            bottomRight: Radius.circular(isNextInCluster ? 6 : 4),
+          )
+        : BorderRadius.only(
+            topLeft: Radius.circular(isPreviousInCluster ? 6 : 20),
+            topRight: const Radius.circular(20),
+            bottomLeft: Radius.circular(isNextInCluster ? 6 : 4),
+            bottomRight: const Radius.circular(20),
+          );
 
     final bubbleColor = note.isPinned
         ? colorScheme.secondaryContainer
-        : colorScheme.primaryContainer;
+        : isLocal
+            ? colorScheme.primaryContainer
+            : colorScheme.surfaceContainerHighest;
 
     final textColor = note.isPinned
         ? colorScheme.onSecondaryContainer
-        : colorScheme.onPrimaryContainer;
+        : isLocal
+            ? colorScheme.onPrimaryContainer
+            : colorScheme.onSurface;
 
     final screenWidth = MediaQuery.sizeOf(context).width;
     final maxBubbleWidth = (screenWidth * 0.75).clamp(240.0, 560.0);
 
     return Align(
-      alignment: Alignment.centerRight,
+      alignment: isLocal ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: EdgeInsets.only(
           bottom: isNextInCluster ? 2.5 : 10.0,
-          left: 48.0,
+          left: isLocal ? 48.0 : 0.0,
+          right: isLocal ? 0.0 : 48.0,
         ),
         constraints: BoxConstraints(
           minWidth: 85.0,
@@ -75,6 +91,26 @@ class ChatBubble extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (!isLocal && senderName != null && senderName!.isNotEmpty && !isPreviousInCluster)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6.0),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.person_pin_circle_rounded, size: 13, color: AppTheme.tertiary),
+                          const SizedBox(width: 4),
+                          Text(
+                            senderName!,
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.tertiary,
+                              letterSpacing: 0.2,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   if (showRoomTag || note.isPinned || note.tags.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 6.0),

@@ -12,6 +12,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'frb_generated.dart';
 import 'p2p.dart';
+import 'p2p_protocol.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 import 'storage.dart';
 
@@ -30,6 +31,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RustStreamSink<P2pEvent> dco_decode_StreamSink_p_2_p_event_Sse(dynamic raw);
 
   @protected
+  RustStreamSink<RoomEvent> dco_decode_StreamSink_room_event_Sse(dynamic raw);
+
+  @protected
   String dco_decode_String(dynamic raw);
 
   @protected
@@ -40,6 +44,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
+
+  @protected
+  NoteItem dco_decode_box_autoadd_note_item(dynamic raw);
 
   @protected
   int dco_decode_i_32(dynamic raw);
@@ -72,7 +79,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
 
   @protected
+  NoteItem? dco_decode_opt_box_autoadd_note_item(dynamic raw);
+
+  @protected
   P2pEvent dco_decode_p_2_p_event(dynamic raw);
+
+  @protected
+  RoomEvent dco_decode_room_event(dynamic raw);
 
   @protected
   RoomInvite dco_decode_room_invite(dynamic raw);
@@ -101,6 +114,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<RoomEvent> sse_decode_StreamSink_room_event_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
@@ -111,6 +129,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
+
+  @protected
+  NoteItem sse_decode_box_autoadd_note_item(SseDeserializer deserializer);
 
   @protected
   int sse_decode_i_32(SseDeserializer deserializer);
@@ -143,7 +164,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
+  NoteItem? sse_decode_opt_box_autoadd_note_item(SseDeserializer deserializer);
+
+  @protected
   P2pEvent sse_decode_p_2_p_event(SseDeserializer deserializer);
+
+  @protected
+  RoomEvent sse_decode_room_event(SseDeserializer deserializer);
 
   @protected
   RoomInvite sse_decode_room_invite(SseDeserializer deserializer);
@@ -176,6 +203,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_StreamSink_room_event_Sse(
+    RustStreamSink<RoomEvent> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_String(String self, SseSerializer serializer);
 
   @protected
@@ -187,6 +220,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_i_64(
     PlatformInt64 self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_note_item(
+    NoteItem self,
     SseSerializer serializer,
   );
 
@@ -227,7 +266,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_opt_box_autoadd_note_item(
+    NoteItem? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_p_2_p_event(P2pEvent self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_room_event(RoomEvent self, SseSerializer serializer);
 
   @protected
   void sse_encode_room_invite(RoomInvite self, SseSerializer serializer);

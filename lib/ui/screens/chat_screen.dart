@@ -4,7 +4,9 @@ import 'package:notetosms/core/theme/app_theme.dart';
 import 'package:notetosms/services/bubble_service.dart';
 import 'package:notetosms/services/vault_service.dart';
 import 'package:notetosms/src/rust/p2p.dart';
+import 'package:notetosms/src/rust/p2p_protocol.dart';
 import 'package:notetosms/src/rust/storage.dart';
+import 'package:notetosms/ui/dialogs/backup_restore_dialog.dart';
 import 'package:notetosms/ui/dialogs/room_dialogs.dart';
 import 'package:notetosms/ui/dialogs/settings_dialog.dart';
 import 'package:notetosms/ui/dialogs/version_history_dialog.dart';
@@ -12,7 +14,14 @@ import 'package:notetosms/ui/views/conversation_list_view.dart';
 import 'package:notetosms/ui/widgets/chat_bubble.dart';
 import 'package:notetosms/ui/widgets/date_header.dart';
 import 'package:notetosms/ui/widgets/message_input_bar.dart';
+import 'package:notetosms/ui/widgets/share_thread_card.dart';
 import 'package:notetosms/ui/widgets/typing_indicator_bubble.dart';
+
+class _TimelineAnnouncement {
+  final String text;
+  final DateTime timestamp;
+  const _TimelineAnnouncement({required this.text, required this.timestamp});
+}
 
 class ChatScreen extends StatefulWidget {
   final String? initialRoomId;
@@ -35,13 +44,19 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isLoading = true;
   bool _isSearching = false;
   bool _showSearchBar = false;
+  bool _isShareCardDismissed = false;
 
-  // P2P & Remote Peer Typing State
-  String? _localNodeId;
-  String? _remoteTypingPeerId;
+  // P2P Live Sync, Presence & Room Membership State
+  int _totalMembers = 1;
+  int _activeOnline = 1;
+  bool _isRemoteTyping = false;
+  String? _remoteTypingPeerName;
   Timer? _remoteTypingTimer;
   StreamSubscription? _p2pSubscription;
-  final Set<String> _activePeersInCurrentRoom = {};
+  StreamSubscription<RoomEvent>? _roomSubscription;
+  final List<_TimelineAnnouncement> _joinAnnouncements = [];
+  final Map<String, String> _remoteNoteAuthors = {};
+  final Set<String> _announcedPeerIds = {};
 
   @override
   void initState() {
@@ -60,7 +75,7 @@ class _ChatScreenState extends State<ChatScreen> {
             initialInviteData: widget.initialInviteData,
             onRoomJoined: (room) {
               _loadInitialData();
-              setState(() => _currentRoomId = room.id);
+              _switchRoom(room.id);
             },
           );
         }
@@ -70,6 +85,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    _roomSubscription?.cancel();
     _p2pSubscription?.cancel();
     _remoteTypingTimer?.cancel();
     _scrollController.dispose();
@@ -79,64 +95,85 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _initP2p() async {
     try {
-      final nodeId = await VaultService.instance.startP2PNode();
-      _localNodeId = nodeId;
+      await VaultService.instance.startP2PNode();
       _p2pSubscription = VaultService.instance.subscribeP2PEvents().listen((event) {
         if (event is P2pEvent) {
-          _handleP2pEvent(event);
+          _handleLegacyP2pEvent(event);
         }
       });
+      _subscribeToCurrentRoomEvents();
     } catch (e) {
       debugPrint('P2P initialization note: $e');
     }
   }
 
-  void _handleP2pEvent(P2pEvent event) {
-    if (!mounted) return;
+  void _subscribeToCurrentRoomEvents() {
+    _roomSubscription?.cancel();
+    _remoteTypingTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _isRemoteTyping = false;
+        _remoteTypingPeerName = null;
+      });
+    }
 
-    if (event.eventType == 'node_started') {
-      if (event.peerId != null) {
-        _localNodeId = event.peerId;
-      }
-    } else if (event.eventType == 'peer_connected') {
-      if (event.roomId == _currentRoomId && event.peerId != null) {
+    _roomSubscription = VaultService.instance
+        .subscribeRoomEvents(_currentRoomId)
+        .listen((event) {
+      if (!mounted || event.roomId != _currentRoomId) return;
+
+      if (event.eventType == 'active_peer_count') {
         setState(() {
-          _activePeersInCurrentRoom.add(event.peerId!);
+          _totalMembers = event.totalMembers > 0 ? event.totalMembers : _totalMembers;
+          _activeOnline = event.activeOnline > 0 ? event.activeOnline : _activeOnline;
         });
-        _showSnackBar('Peer connected to #${_currentRoom?.name ?? _currentRoomId}');
-      }
-    } else if (event.eventType == 'peer_disconnected') {
-      if (event.roomId == _currentRoomId && event.peerId != null) {
+      } else if (event.eventType == 'peer_joined') {
+        final peerKey = event.peerId ?? event.displayName ?? 'peer';
+        final displayName = event.displayName ?? 'A device';
+        final isNew = !_announcedPeerIds.contains(peerKey);
+        if (isNew) {
+          _announcedPeerIds.add(peerKey);
+          setState(() {
+            _activeOnline = event.activeOnline > 0 ? event.activeOnline : _activeOnline + 1;
+            _totalMembers = event.totalMembers > 0 ? event.totalMembers : (_totalMembers < _activeOnline ? _activeOnline : _totalMembers);
+            _joinAnnouncements.add(_TimelineAnnouncement(
+              text: '$displayName joined the thread',
+              timestamp: DateTime.now(),
+            ));
+          });
+          _showSnackBar('$displayName joined #${_currentRoom?.name ?? _currentRoomId}');
+        }
+      } else if (event.eventType == 'peer_left') {
         setState(() {
-          _activePeersInCurrentRoom.remove(event.peerId!);
-          if (_remoteTypingPeerId == event.peerId) {
-            _remoteTypingPeerId = null;
-            _remoteTypingTimer?.cancel();
-          }
+          _activeOnline = event.activeOnline > 0 ? event.activeOnline : (_activeOnline > 1 ? _activeOnline - 1 : 1);
         });
-      }
-    } else if (event.eventType == 'typing' || event.eventType == 'peer_typing') {
-      if (event.roomId == _currentRoomId &&
-          event.peerId != null &&
-          event.peerId != _localNodeId &&
-          _activePeersInCurrentRoom.contains(event.peerId)) {
+      } else if (event.eventType == 'remote_typing') {
+        final isTyping = event.isTyping ?? false;
         setState(() {
-          _remoteTypingPeerId = event.peerId;
+          _isRemoteTyping = isTyping;
+          _remoteTypingPeerName = event.displayName;
         });
         _remoteTypingTimer?.cancel();
-        _remoteTypingTimer = Timer(const Duration(seconds: 3), () {
-          if (mounted) setState(() => _remoteTypingPeerId = null);
-        });
-      }
-    } else if (event.eventType == 'note_received') {
-      if (event.roomId == _currentRoomId) {
-        if (event.authorId != null && event.authorId == _remoteTypingPeerId) {
-          _remoteTypingTimer?.cancel();
-          setState(() => _remoteTypingPeerId = null);
+        if (isTyping) {
+          _remoteTypingTimer = Timer(const Duration(seconds: 3), () {
+            if (mounted) setState(() => _isRemoteTyping = false);
+          });
         }
+      } else if (event.eventType == 'note_received') {
+        if (event.note != null) {
+          final authorName = event.displayName ??
+              (event.peerId != null ? 'Peer (${event.peerId!.substring(0, event.peerId!.length.clamp(0, 6))})' : 'Peer');
+          _remoteNoteAuthors[event.note!.id] = authorName;
+        }
+        _remoteTypingTimer?.cancel();
+        setState(() => _isRemoteTyping = false);
         _loadNotesForCurrentRoom();
       }
-    }
+    });
+  }
+
+  void _handleLegacyP2pEvent(P2pEvent event) {
+    if (!mounted) return;
   }
 
   Future<void> _loadInitialData() async {
@@ -288,6 +325,29 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  void _openShareSheet() {
+    final currentRoom = _currentRoom;
+    if (currentRoom == null) return;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(ctx).viewInsets.bottom,
+          ),
+          child: SingleChildScrollView(
+            child: ShareThreadCard(
+              room: currentRoom,
+              onDismiss: () => Navigator.pop(ctx),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   RoomItem? get _currentRoom {
     if (_rooms.isEmpty) return null;
     return _rooms.firstWhere(
@@ -315,6 +375,24 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  void _switchRoom(String roomId) {
+    if (_currentRoomId != roomId) {
+      setState(() {
+        _currentRoomId = roomId;
+        _isShareCardDismissed = false;
+        _totalMembers = 1;
+        _activeOnline = 1;
+        _isRemoteTyping = false;
+        _remoteTypingPeerName = null;
+        _joinAnnouncements.clear();
+        _announcedPeerIds.clear();
+        _remoteNoteAuthors.clear();
+      });
+      _subscribeToCurrentRoomEvents();
+      _loadNotesForCurrentRoom();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.sizeOf(context).width;
@@ -324,11 +402,17 @@ class _ChatScreenState extends State<ChatScreen> {
       return ConversationListView(
         selectedRoomId: _currentRoomId,
         onSelectRoom: (roomId) {
+          setState(() {
+            _isShareCardDismissed = false;
+          });
           Navigator.of(context).push(
             MaterialPageRoute(
               builder: (context) => ChatScreen(initialRoomId: roomId),
             ),
-          ).then((_) => _loadInitialData());
+          ).then((_) {
+            _loadInitialData();
+            _subscribeToCurrentRoomEvents();
+          });
         },
       );
     }
@@ -342,17 +426,7 @@ class _ChatScreenState extends State<ChatScreen> {
               child: ConversationListView(
                 selectedRoomId: _currentRoomId,
                 isMasterDetail: true,
-                onSelectRoom: (roomId) {
-                  if (_currentRoomId != roomId) {
-                    setState(() {
-                      _currentRoomId = roomId;
-                      _activePeersInCurrentRoom.clear();
-                      _remoteTypingPeerId = null;
-                      _remoteTypingTimer?.cancel();
-                    });
-                    _loadNotesForCurrentRoom();
-                  }
-                },
+                onSelectRoom: _switchRoom,
               ),
             ),
             VerticalDivider(
@@ -374,7 +448,6 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _buildChatDetail({required bool showBackButton}) {
     final colorScheme = Theme.of(context).colorScheme;
     final currentRoom = _currentRoom;
-    final hasConnectedPeers = _activePeersInCurrentRoom.isNotEmpty;
 
     return Scaffold(
       backgroundColor: colorScheme.surface,
@@ -429,7 +502,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   Row(
                     children: [
-                      if (hasConnectedPeers) ...[
+                      if (_activeOnline > 1) ...[
                         Container(
                           width: 7,
                           height: 7,
@@ -438,21 +511,18 @@ class _ChatScreenState extends State<ChatScreen> {
                             shape: BoxShape.circle,
                           ),
                         ),
-                        const SizedBox(width: 4),
-                        Text(
-                          'Peer Connected • ',
+                        const SizedBox(width: 5),
+                      ],
+                      Expanded(
+                        child: Text(
+                          '$_totalMembers member${_totalMembers == 1 ? '' : 's'} • $_activeOnline online • E2E Encrypted',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 11.5,
-                            color: Colors.greenAccent.shade400,
-                            fontWeight: FontWeight.w600,
+                            color: _activeOnline > 1 ? Colors.greenAccent.shade400 : colorScheme.onSurfaceVariant,
+                            fontWeight: _activeOnline > 1 ? FontWeight.w600 : FontWeight.normal,
                           ),
-                        ),
-                      ],
-                      Text(
-                        '${_notes.length} note${_notes.length == 1 ? '' : 's'} • E2E Encrypted',
-                        style: TextStyle(
-                          fontSize: 11.5,
-                          color: colorScheme.onSurfaceVariant,
                         ),
                       ),
                     ],
@@ -480,7 +550,13 @@ class _ChatScreenState extends State<ChatScreen> {
             IconButton(
               icon: const Icon(Icons.qr_code_2_rounded),
               tooltip: 'Share Room via P2P',
-              onPressed: () => RoomDialogs.showShareRoomDialog(context, currentRoom),
+              onPressed: () {
+                if (_notes.isEmpty && _isShareCardDismissed) {
+                  setState(() => _isShareCardDismissed = false);
+                } else {
+                  _openShareSheet();
+                }
+              },
             ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert),
@@ -489,14 +565,14 @@ class _ChatScreenState extends State<ChatScreen> {
             onSelected: (value) {
               if (value == 'share') {
                 if (currentRoom != null) {
-                  RoomDialogs.showShareRoomDialog(context, currentRoom);
+                  _openShareSheet();
                 }
               } else if (value == 'join_room') {
                 RoomDialogs.showJoinRoomDialog(
                   context,
                   onRoomJoined: (room) {
                     _loadInitialData();
-                    setState(() => _currentRoomId = room.id);
+                    _switchRoom(room.id);
                   },
                 );
               } else if (value == 'bubble') {
@@ -515,6 +591,13 @@ class _ChatScreenState extends State<ChatScreen> {
                     }
                   });
                 }
+              } else if (value == 'backup_restore') {
+                BackupRestoreDialog.show(
+                  context,
+                  onRestoreComplete: () {
+                    _loadInitialData();
+                  },
+                );
               } else if (value == 'security') {
                 SettingsDialog.showSecurityInfo(context);
               } else if (value == 'check_updates') {
@@ -568,6 +651,16 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ),
               const PopupMenuItem(
+                value: 'backup_restore',
+                child: Row(
+                  children: [
+                    Icon(Icons.backup_rounded, size: 20, color: AppTheme.tertiary),
+                    SizedBox(width: 10),
+                    Text('Backup & Restore'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
                 value: 'security',
                 child: Row(
                   children: [
@@ -615,40 +708,27 @@ class _ChatScreenState extends State<ChatScreen> {
                 controller: _searchController,
                 autofocus: true,
                 style: TextStyle(color: colorScheme.onSurface, fontSize: 14.5),
-                onChanged: _handleSearch,
                 decoration: InputDecoration(
                   hintText: 'Search within #${currentRoom?.name ?? _currentRoomId}...',
-                  prefixIcon: const Icon(Icons.search, size: 20),
+                  prefixIcon: const Icon(Icons.search_rounded, size: 20),
                   suffixIcon: _searchController.text.isNotEmpty
                       ? IconButton(
-                          icon: const Icon(Icons.clear, size: 18),
+                          icon: const Icon(Icons.clear_rounded, size: 18),
                           onPressed: () {
                             _searchController.clear();
                             _loadNotesForCurrentRoom();
                           },
                         )
                       : null,
-                ),
-              ),
-            ),
-          if (_isSearching)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-              color: colorScheme.primary.withValues(alpha: 0.15),
-              width: double.infinity,
-              child: Row(
-                children: [
-                  Icon(Icons.manage_search, color: colorScheme.primary, size: 16),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Found ${_notes.length} match${_notes.length == 1 ? '' : 'es'} in #${currentRoom?.name ?? _currentRoomId}',
-                    style: TextStyle(
-                      color: colorScheme.primary,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                  filled: true,
+                  fillColor: colorScheme.surfaceContainerLow,
+                  border: OutlineInputBorde                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
                   ),
-                ],
+                ),
+                onChanged: _handleSearch,
               ),
             ),
           Expanded(
@@ -658,15 +738,23 @@ class _ChatScreenState extends State<ChatScreen> {
                     ? _buildEmptyState()
                     : _buildNotesTimeline(),
           ),
-          if (_remoteTypingPeerId != null && _activePeersInCurrentRoom.isNotEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16.0),
-              child: TypingIndicatorBubble(label: 'Peer is drafting note...'),
+          if (_isRemoteTyping)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+              child: TypingIndicatorBubble(
+                label: _remoteTypingPeerName != null
+                    ? '$_remoteTypingPeerName is typing...'
+                    : 'Peer is drafting note...',
+              ),
             ),
           MessageInputBar(
             roomName: currentRoom?.name ?? _currentRoomId,
             onSendMessage: _handleSendMessage,
             onTypingChanged: (isTyping) {
+              VaultService.instance.sendTypingStatus(
+                roomId: _currentRoomId,
+                isTyping: isTyping,
+              );
               if (isTyping) _scrollToBottom();
             },
           ),
@@ -675,8 +763,31 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Widget _buildEmptyState() {
+  Widget _buildEmptyState() {() {
     final colorScheme = Theme.of(context).colorScheme;
+    final currentRoom = _currentRoom;
+
+    if (!_isSearching && currentRoom != null && !_isShareCardDismissed) {
+      return Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              ShareThreadCard(
+                room: currentRoom,
+                onDismiss: () => setState(() => _isShareCardDismissed = true),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Type a private note or checklist below.',
+                style: TextStyle(fontSize: 12.5, color: colorScheme.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
     return Center(
       child: Column(
@@ -697,8 +808,8 @@ class _ChatScreenState extends State<ChatScreen> {
           const SizedBox(height: 14),
           Text(
             _isSearching
-                ? 'No matching notes in #${_currentRoom?.name ?? _currentRoomId}'
-                : 'No notes in #${_currentRoom?.name ?? _currentRoomId}',
+                ? 'No matching notes in #${currentRoom?.name ?? _currentRoomId}'
+                : 'No notes in #${currentRoom?.name ?? _currentRoomId}',
             style: TextStyle(
               fontSize: 15,
               fontWeight: FontWeight.w600,
@@ -710,6 +821,18 @@ class _ChatScreenState extends State<ChatScreen> {
             'Type a private note or checklist below.',
             style: TextStyle(fontSize: 12.5, color: colorScheme.onSurfaceVariant),
           ),
+          if (!_isSearching && currentRoom != null) ...[
+            const SizedBox(height: 16),
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                side: BorderSide(color: colorScheme.outlineVariant),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              ),
+              icon: const Icon(Icons.qr_code_2_rounded, size: 18),
+              label: const Text('Show Invite QR Code', style: TextStyle(fontSize: 13)),
+              onPressed: () => setState(() => _isShareCardDismissed = false),
+            ),
+          ],
         ],
       ),
     );
@@ -761,14 +884,23 @@ class _ChatScreenState extends State<ChatScreen> {
           }
         }
 
+        final isLocal = !_remoteNoteAuthors.containsKey(note.id);
+        final senderName = _remoteNoteAuthors[note.id];
+
         return Column(
           children: [
             if (showDateHeader) DateHeader(date: noteDate),
+            if (index == 0 && _joinAnnouncements.isNotEmpty) ...[
+              for (final announcement in _joinAnnouncements)
+                _JoinNotificationPill(text: announcement.text),
+            ],
             ChatBubble(
               note: note,
               showRoomTag: false,
               isPreviousInCluster: isPreviousInCluster,
               isNextInCluster: isNextInCluster,
+              isLocal: isLocal,
+              senderName: senderName,
               onToggleTodo: (isCompleted) => _handleToggleTodo(note, isCompleted),
               onTogglePin: (isPinned) => _handleTogglePin(note, isPinned),
               onEdit: (newContent) => _handleEditNote(note, newContent),
@@ -777,6 +909,44 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         );
       },
+    );
+  }
+}
+
+class _JoinNotificationPill extends StatelessWidget {
+  final String text;
+  const _JoinNotificationPill({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Center(
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: colorScheme.outlineVariant.withValues(alpha: 0.3),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.group_add_rounded, size: 14, color: AppTheme.tertiary),
+            const SizedBox(width: 6),
+            Text(
+              text,
+              style: TextStyle(
+                fontSize: 12,
+                color: colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

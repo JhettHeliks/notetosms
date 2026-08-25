@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-/// P2P Event emitted across FRB to Flutter
+/// Legacy P2P Event for backward compatibility
 class P2pEvent {
   final String eventType;
   final String? peerId;
