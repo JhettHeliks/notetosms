@@ -31,6 +31,10 @@ android {
         release {
             // Signing with the debug keys for local testing, replace with release signing for production keystore.
             signingConfig = signingConfigs.getByName("debug")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 
