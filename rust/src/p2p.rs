@@ -1,5 +1,8 @@
 use anyhow::{anyhow, Context, Result};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{
+    engine::general_purpose::{STANDARD as BASE64, URL_SAFE_NO_PAD as BASE64_URL},
+    Engine,
+};
 use chacha20poly1305::{
     aead::{Aead, KeyInit},
     ChaCha20Poly1305, Key, Nonce,
@@ -708,8 +711,13 @@ impl P2pNode {
             node_addr,
         };
 
-        let json = serde_json::to_string(&ticket)?;
-        let base64_ticket = BASE64.encode(json.as_bytes());
+        // Compress: JSON → Zlib → URL-safe Base64 (produces ~40% shorter tickets = denser QR)
+        let json = serde_json::to_vec(&ticket)?;
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        use std::io::Write;
+        encoder.write_all(&json).context("Zlib encode failed")?;
+        let compressed = encoder.finish().context("Zlib finish failed")?;
+        let base64_ticket = BASE64_URL.encode(&compressed);
         Ok(format!("notetosms://join?ticket={}", base64_ticket))
     }
 
@@ -725,7 +733,23 @@ impl P2pNode {
             .trim_start_matches("notetosms://join?ticket=")
             .trim_start_matches("notetosms://invite?data=");
 
-        let json_bytes = BASE64.decode(cleaned).context("Invalid base64 ticket string")?;
+        // Try compressed format (URL-safe Base64 → Zlib → JSON) first, then fall back to legacy plain Base64-JSON
+        let json_bytes: Vec<u8> = if let Ok(compressed) = BASE64_URL.decode(cleaned) {
+            use std::io::Read;
+            let mut decoder = flate2::read::ZlibDecoder::new(compressed.as_slice());
+            let mut buf = Vec::new();
+            if decoder.read_to_end(&mut buf).is_ok() && !buf.is_empty() {
+                buf
+            } else if let Ok(plain) = BASE64.decode(cleaned) {
+                plain
+            } else {
+                return Err(anyhow!("Invalid compressed or base64 ticket string"));
+            }
+        } else if let Ok(plain) = BASE64.decode(cleaned) {
+            plain
+        } else {
+            return Err(anyhow!("Invalid base64 ticket string"));
+        };
 
         // Attempt deserializing as new RoomShareTicket, fallback to RoomInvitePayload
         let ticket: RoomShareTicket = if let Ok(t) = serde_json::from_slice::<RoomShareTicket>(&json_bytes) {

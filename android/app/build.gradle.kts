@@ -42,6 +42,13 @@ android {
         ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~:!desktop.ini:!Desktop.ini"
     }
 
+    packaging {
+        jniLibs {
+            keepDebugSymbols.add("**/libflutter.so")
+            keepDebugSymbols.add("**/libapp.so")
+        }
+    }
+
     applicationVariants.all {
         val variant = this
         variant.outputs.all {

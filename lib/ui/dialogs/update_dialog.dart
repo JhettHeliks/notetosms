@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:ota_update/ota_update.dart';
 import 'package:notetosms/core/theme/app_theme.dart';
 import 'package:notetosms/services/update_service.dart';
 
@@ -103,24 +102,90 @@ class UpdateDialog extends StatefulWidget {
 }
 
 class _UpdateDialogState extends State<UpdateDialog> {
-  StreamSubscription<OtaEvent>? _otaSubscription;
+  StreamSubscription<UpdateProgressEvent>? _updateSubscription;
   bool _isDownloading = false;
   int _progressPercent = 0;
   String _statusText = '';
   String? _errorMessage;
+  String? _downloadedFilePath;
 
   @override
   void dispose() {
-    _otaSubscription?.cancel();
+    _updateSubscription?.cancel();
     super.dispose();
   }
 
-  void _startDownload() {
+  Future<void> _showPermissionDialog(String filePath) async {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    final shouldOpenSettings = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        backgroundColor: colorScheme.surfaceContainerHigh,
+        title: Row(
+          children: [
+            Icon(Icons.security_update_warning_rounded, color: colorScheme.primary, size: 24),
+            const SizedBox(width: 10),
+            const Text('Permission Needed', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Text(
+          'To install updates directly, allow NoteToSMS to install unknown apps in Android Settings.',
+          style: TextStyle(fontSize: 13.5, color: colorScheme.onSurfaceVariant),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text('Cancel', style: TextStyle(color: colorScheme.onSurfaceVariant)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: colorScheme.primary,
+              foregroundColor: colorScheme.onPrimary,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Open Settings'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldOpenSettings == true) {
+      await UpdateService.instance.openInstallPermissionSetting();
+    }
+  }
+
+  Future<void> _startDownload() async {
     if (!kIsWeb && !Platform.isAndroid) {
       setState(() {
         _errorMessage = 'In-app OTA installation is only supported on Android devices.';
       });
       return;
+    }
+
+    // If already downloaded, try installing directly
+    if (_downloadedFilePath != null && File(_downloadedFilePath!).existsSync()) {
+      final hasPerm = await UpdateService.instance.checkInstallPermission();
+      if (!hasPerm) {
+        await _showPermissionDialog(_downloadedFilePath!);
+        return;
+      }
+      try {
+        setState(() {
+          _statusText = 'Launching installer...';
+          _errorMessage = null;
+        });
+        await UpdateService.instance.installApk(_downloadedFilePath!);
+        return;
+      } catch (e) {
+        setState(() {
+          _errorMessage = 'Installation failed: $e';
+        });
+        return;
+      }
     }
 
     setState(() {
@@ -131,38 +196,50 @@ class _UpdateDialogState extends State<UpdateDialog> {
     });
 
     try {
-      _otaSubscription = UpdateService.instance
-          .executeDownloadAndInstall(apkDownloadUrl: widget.updateInfo.apkDownloadUrl)
+      _updateSubscription?.cancel();
+      _updateSubscription = UpdateService.instance
+          .downloadAndInstallApk(apkDownloadUrl: widget.updateInfo.apkDownloadUrl)
           .listen(
-        (OtaEvent event) {
+        (UpdateProgressEvent event) async {
           if (!mounted) return;
 
           setState(() {
             switch (event.status) {
-              case OtaStatus.DOWNLOADING:
-                _progressPercent = int.tryParse(event.value ?? '0') ?? _progressPercent;
-                _statusText = 'Downloading update: $_progressPercent%';
+              case UpdateStatus.idle:
                 break;
-              case OtaStatus.INSTALLING:
+              case UpdateStatus.downloading:
+                _progressPercent = event.progressPercent;
+                _statusText = 'Downloading: ${event.formattedProgress}';
+                if (event.filePath != null) {
+                  _downloadedFilePath = event.filePath;
+                }
+                break;
+              case UpdateStatus.permissionRequired:
+                _isDownloading = false;
                 _progressPercent = 100;
-                _statusText = 'Installing update package...';
+                _downloadedFilePath = event.filePath;
+                _statusText = 'Permission required to install package.';
                 break;
-              case OtaStatus.ALREADY_RUNNING_ERROR:
+              case UpdateStatus.installing:
                 _isDownloading = false;
-                _errorMessage = 'An update download is already in progress.';
+                _progressPercent = 100;
+                _downloadedFilePath = event.filePath;
+                _statusText = 'Launching system package installer...';
                 break;
-              case OtaStatus.PERMISSION_NOT_GRANTED_ERROR:
+              case UpdateStatus.completed:
                 _isDownloading = false;
-                _errorMessage = 'Permission denied. Please allow "Install unknown apps" for notetosms in Android Settings.';
+                _statusText = 'Update ready.';
                 break;
-              case OtaStatus.DOWNLOAD_ERROR:
-              case OtaStatus.INTERNAL_ERROR:
-              case OtaStatus.CHECKSUM_ERROR:
+              case UpdateStatus.error:
                 _isDownloading = false;
-                _errorMessage = 'Update failed (${event.status.name}). Please check your connection and try again.';
+                _errorMessage = event.errorMessage ?? 'Download error occurred. Please retry.';
                 break;
             }
           });
+
+          if (event.status == UpdateStatus.permissionRequired && event.filePath != null) {
+            await _showPermissionDialog(event.filePath!);
+          }
         },
         onError: (error) {
           if (!mounted) return;
@@ -174,7 +251,8 @@ class _UpdateDialogState extends State<UpdateDialog> {
         onDone: () {
           if (mounted && _isDownloading && _errorMessage == null) {
             setState(() {
-              _statusText = 'Launching installer...';
+              _isDownloading = false;
+              _statusText = 'Download complete.';
             });
           }
         },

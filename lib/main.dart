@@ -1,5 +1,8 @@
+import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:notetosms/core/theme/app_theme.dart';
+import 'package:notetosms/core/theme/theme_provider.dart';
 import 'package:notetosms/src/rust/frb_generated.dart';
 import 'package:notetosms/ui/screens/auth_gate.dart';
 import 'package:notetosms/ui/views/bubble_chat_view.dart';
@@ -7,7 +10,12 @@ import 'package:notetosms/ui/views/bubble_chat_view.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await RustLib.init();
-  runApp(const NoteToSmsApp());
+  runApp(
+    ChangeNotifierProvider(
+      create: (_) => ThemeProvider(),
+      child: const NoteToSmsApp(),
+    ),
+  );
 }
 
 class NoteToSmsApp extends StatelessWidget {
@@ -15,12 +23,35 @@ class NoteToSmsApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'notetosms',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.darkTheme,
-      initialRoute: '/',
-      onGenerateRoute: (settings) {
+    final themeProvider = context.watch<ThemeProvider>();
+
+    return DynamicColorBuilder(
+      builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
+        ColorScheme lightScheme;
+        ColorScheme darkScheme;
+
+        if (themeProvider.useDynamicColor && lightDynamic != null && darkDynamic != null) {
+          lightScheme = lightDynamic.harmonized();
+          darkScheme = darkDynamic.harmonized();
+        } else {
+          lightScheme = ColorScheme.fromSeed(
+            seedColor: themeProvider.customSeedColor,
+            brightness: Brightness.light,
+          );
+          darkScheme = ColorScheme.fromSeed(
+            seedColor: themeProvider.customSeedColor,
+            brightness: Brightness.dark,
+          );
+        }
+
+        return MaterialApp(
+          title: 'notetosms',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.buildTheme(lightScheme),
+          darkTheme: AppTheme.buildTheme(darkScheme),
+          themeMode: themeProvider.themeMode,
+          initialRoute: '/',
+          onGenerateRoute: (settings) {
         final uri = Uri.tryParse(settings.name ?? '/');
 
         if (uri != null) {
@@ -89,5 +120,8 @@ class NoteToSmsApp extends StatelessWidget {
         );
       },
     );
+      },
+    );
   }
 }
+

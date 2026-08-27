@@ -11,11 +11,14 @@ import 'package:notetosms/ui/dialogs/room_dialogs.dart';
 import 'package:notetosms/ui/dialogs/settings_dialog.dart';
 import 'package:notetosms/ui/dialogs/version_history_dialog.dart';
 import 'package:notetosms/ui/views/conversation_list_view.dart';
-import 'package:notetosms/ui/widgets/chat_bubble.dart';
 import 'package:notetosms/ui/widgets/date_header.dart';
 import 'package:notetosms/ui/widgets/message_input_bar.dart';
 import 'package:notetosms/ui/widgets/share_thread_card.dart';
+import 'package:notetosms/ui/widgets/swipeable_note_bubble.dart';
 import 'package:notetosms/ui/widgets/typing_indicator_bubble.dart';
+import 'package:notetosms/ui/widgets/motion/bouncy_pressable.dart';
+import 'package:notetosms/ui/widgets/motion/fade_slide_transition.dart';
+import 'package:notetosms/ui/screens/appearance_screen.dart';
 
 class _TimelineAnnouncement {
   final String text;
@@ -453,9 +456,9 @@ class _ChatScreenState extends State<ChatScreen> {
       backgroundColor: colorScheme.surface,
       appBar: AppBar(
         leading: showBackButton
-            ? IconButton(
-                icon: const Icon(Icons.arrow_back_rounded),
-                onPressed: () => Navigator.pop(context),
+            ? BouncyPressable(
+                onTap: () => Navigator.pop(context),
+                child: const Icon(Icons.arrow_back_rounded),
               )
             : null,
         leadingWidth: showBackButton ? 48 : 16,
@@ -533,10 +536,8 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
         actions: [
-          IconButton(
-            icon: Icon(_showSearchBar ? Icons.close : Icons.search_rounded),
-            tooltip: 'Search in conversation',
-            onPressed: () {
+          BouncyPressable(
+            onTap: () {
               setState(() {
                 _showSearchBar = !_showSearchBar;
                 if (!_showSearchBar) {
@@ -545,18 +546,30 @@ class _ChatScreenState extends State<ChatScreen> {
                 }
               });
             },
+            child: Tooltip(
+              message: 'Search in conversation',
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Icon(_showSearchBar ? Icons.close : Icons.search_rounded),
+              ),
+            ),
           ),
           if (currentRoom != null)
-            IconButton(
-              icon: const Icon(Icons.qr_code_2_rounded),
-              tooltip: 'Share Room via P2P',
-              onPressed: () {
+            BouncyPressable(
+              onTap: () {
                 if (_notes.isEmpty && _isShareCardDismissed) {
                   setState(() => _isShareCardDismissed = false);
                 } else {
                   _openShareSheet();
                 }
               },
+              child: const Tooltip(
+                message: 'Share Room via P2P',
+                child: Padding(
+                  padding: EdgeInsets.all(12),
+                  child: Icon(Icons.qr_code_2_rounded),
+                ),
+              ),
             ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert),
@@ -597,6 +610,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   onRestoreComplete: () {
                     _loadInitialData();
                   },
+                );
+              } else if (value == 'appearance') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (context) => const AppearanceScreen()),
                 );
               } else if (value == 'security') {
                 SettingsDialog.showSecurityInfo(context);
@@ -657,6 +674,16 @@ class _ChatScreenState extends State<ChatScreen> {
                     Icon(Icons.backup_rounded, size: 20, color: AppTheme.tertiary),
                     SizedBox(width: 10),
                     Text('Backup & Restore'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'appearance',
+                child: Row(
+                  children: [
+                    Icon(Icons.palette_outlined, size: 20, color: AppTheme.secondary),
+                    SizedBox(width: 10),
+                    Text('Appearance & Themes'),
                   ],
                 ),
               ),
@@ -724,7 +751,8 @@ class _ChatScreenState extends State<ChatScreen> {
                   contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
                   filled: true,
                   fillColor: colorScheme.surfaceContainerLow,
-                  border: OutlineInputBorde                    borderRadius: BorderRadius.circular(12),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide.none,
                   ),
                 ),
@@ -763,7 +791,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Widget _buildEmptyState() {() {
+  Widget _buildEmptyState() {
     final colorScheme = Theme.of(context).colorScheme;
     final currentRoom = _currentRoom;
 
@@ -841,6 +869,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _buildNotesTimeline() {
     return ListView.builder(
       controller: _scrollController,
+      physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       itemCount: _notes.length,
       itemBuilder: (context, index) {
@@ -861,52 +890,74 @@ class _ChatScreenState extends State<ChatScreen> {
           }
         }
 
+        final isLocal = !_remoteNoteAuthors.containsKey(note.id);
+        final senderName = _remoteNoteAuthors[note.id];
+
         bool isPreviousInCluster = false;
         bool isNextInCluster = false;
 
+        // Compare with previous note for consecutive author grouping
         if (index > 0) {
           final prevNote = _notes[index - 1];
+          final prevIsLocal = !_remoteNoteAuthors.containsKey(prevNote.id);
+          final prevSenderName = _remoteNoteAuthors[prevNote.id];
           final diff = (note.timestampMs.toInt() - prevNote.timestampMs.toInt()).abs();
-          if (prevNote.roomId == note.roomId && diff <= 120000 && !showDateHeader) {
+          final isSameAuthor = isLocal
+              ? prevIsLocal
+              : (!prevIsLocal && (prevSenderName == senderName || prevNote.roomId == note.roomId));
+          if (isSameAuthor && diff <= 120000 && !showDateHeader) {
             isPreviousInCluster = true;
           }
         }
 
+        // Compare with next note for consecutive author grouping
         if (index < _notes.length - 1) {
           final nextNote = _notes[index + 1];
+          final nextIsLocal = !_remoteNoteAuthors.containsKey(nextNote.id);
+          final nextSenderName = _remoteNoteAuthors[nextNote.id];
           final nextDate = DateTime.fromMillisecondsSinceEpoch(nextNote.timestampMs.toInt());
           final isSameDay = noteDate.year == nextDate.year &&
               noteDate.month == nextDate.month &&
               noteDate.day == nextDate.day;
           final diff = (nextNote.timestampMs.toInt() - note.timestampMs.toInt()).abs();
-          if (nextNote.roomId == note.roomId && diff <= 120000 && isSameDay) {
+          final isSameAuthor = isLocal
+              ? nextIsLocal
+              : (!nextIsLocal && (nextSenderName == senderName || nextNote.roomId == note.roomId));
+          if (isSameAuthor && diff <= 120000 && isSameDay) {
             isNextInCluster = true;
           }
         }
 
-        final isLocal = !_remoteNoteAuthors.containsKey(note.id);
-        final senderName = _remoteNoteAuthors[note.id];
+        final staggerDelay = Duration(milliseconds: (index * 18).clamp(0, 300));
+        final isGrouped = isNextInCluster || isPreviousInCluster;
+        final bottomMargin = isNextInCluster ? 2.0 : 8.0;
 
-        return Column(
-          children: [
-            if (showDateHeader) DateHeader(date: noteDate),
-            if (index == 0 && _joinAnnouncements.isNotEmpty) ...[
-              for (final announcement in _joinAnnouncements)
-                _JoinNotificationPill(text: announcement.text),
-            ],
-            ChatBubble(
-              note: note,
-              showRoomTag: false,
-              isPreviousInCluster: isPreviousInCluster,
-              isNextInCluster: isNextInCluster,
-              isLocal: isLocal,
-              senderName: senderName,
-              onToggleTodo: (isCompleted) => _handleToggleTodo(note, isCompleted),
-              onTogglePin: (isPinned) => _handleTogglePin(note, isPinned),
-              onEdit: (newContent) => _handleEditNote(note, newContent),
-              onDelete: () => _handleDeleteNote(note),
+        return FadeSlideTransition(
+          delay: staggerDelay,
+          child: Padding(
+            padding: EdgeInsets.only(bottom: bottomMargin),
+            child: Column(
+              children: [
+                if (showDateHeader) DateHeader(date: noteDate),
+                if (index == 0 && _joinAnnouncements.isNotEmpty) ...[
+                  for (final announcement in _joinAnnouncements)
+                    _JoinNotificationPill(text: announcement.text),
+                ],
+                SwipeableNoteBubble(
+                  note: note,
+                  isLocalUser: isLocal,
+                  senderName: senderName,
+                  showSenderHeader: !isPreviousInCluster,
+                  isGrouped: isGrouped,
+                  showRoomTag: false,
+                  onToggleTodo: (isCompleted) => _handleToggleTodo(note, isCompleted),
+                  onTogglePin: (isPinned) => _handleTogglePin(note, isPinned),
+                  onEdit: (newContent) => _handleEditNote(note, newContent),
+                  onDelete: () => _handleDeleteNote(note),
+                ),
+              ],
             ),
-          ],
+          ),
         );
       },
     );

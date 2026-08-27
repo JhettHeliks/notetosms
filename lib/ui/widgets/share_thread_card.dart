@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:notetosms/core/theme/app_theme.dart';
 import 'package:notetosms/services/vault_service.dart';
 import 'package:notetosms/src/rust/storage.dart';
-import 'package:qr_flutter/qr_flutter.dart';
+import 'package:pretty_qr_code/pretty_qr_code.dart';
 import 'package:share_plus/share_plus.dart';
 
 class ShareThreadCard extends StatefulWidget {
@@ -20,19 +20,41 @@ class ShareThreadCard extends StatefulWidget {
   State<ShareThreadCard> createState() => _ShareThreadCardState();
 }
 
-class _ShareThreadCardState extends State<ShareThreadCard> {
+class _ShareThreadCardState extends State<ShareThreadCard>
+    with SingleTickerProviderStateMixin {
   late Future<String> _inviteFuture;
+  late final AnimationController _entranceController;
+  late final Animation<double> _entranceScale;
+  late final Animation<double> _entranceOpacity;
+  bool _copied = false;
 
   @override
   void initState() {
     super.initState();
+    _entranceController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 300),
+    );
+    _entranceScale = Tween<double>(begin: 0.82, end: 1.0).animate(
+      CurvedAnimation(parent: _entranceController, curve: Curves.easeOutBack),
+    );
+    _entranceOpacity = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _entranceController, curve: Curves.easeOut),
+    );
     _loadInviteCode();
+  }
+
+  @override
+  void dispose() {
+    _entranceController.dispose();
+    super.dispose();
   }
 
   @override
   void didUpdateWidget(covariant ShareThreadCard oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.room.id != widget.room.id) {
+      _entranceController.reset();
       _loadInviteCode();
     }
   }
@@ -48,35 +70,35 @@ class _ShareThreadCardState extends State<ShareThreadCard> {
       final ticket = await VaultService.instance.exportRoomTicket(roomId: widget.room.id);
       if (ticket.isNotEmpty) return ticket;
     } catch (_) {}
-
     return await VaultService.instance.exportRoomInvite(widget.room.id);
   }
 
   void _copyToClipboard(String data) {
     Clipboard.setData(ClipboardData(text: data));
-    HapticFeedback.selectionClick();
+    HapticFeedback.lightImpact();
+    setState(() => _copied = true);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: const Row(
           children: [
-            Icon(Icons.check_circle, color: AppTheme.tertiary, size: 20),
+            Icon(Icons.check_circle_rounded, color: AppTheme.tertiary, size: 18),
             SizedBox(width: 10),
-            Text('Invite code copied to clipboard!'),
+            Text('Invite code copied!'),
           ],
         ),
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         duration: const Duration(seconds: 2),
       ),
     );
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _copied = false);
+    });
   }
 
   void _shareLink(String data) {
     HapticFeedback.lightImpact();
-    Share.share(
-      data,
-      subject: 'Join #${widget.room.name} on notetosms',
-    );
+    Share.share(data, subject: 'Join #${widget.room.name} on notetosms');
   }
 
   @override
@@ -101,7 +123,7 @@ class _ShareThreadCardState extends State<ShareThreadCard> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // Header: Icon, Room Name, Subtitle, and optional Dismiss Button
+            // ── Header ────────────────────────────────────────────────────
             Row(
               children: [
                 Container(
@@ -111,11 +133,7 @@ class _ShareThreadCardState extends State<ShareThreadCard> {
                     color: roomColor.withValues(alpha: 0.2),
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(
-                    Icons.qr_code_2_rounded,
-                    color: roomColor,
-                    size: 20,
-                  ),
+                  child: Icon(Icons.qr_code_2_rounded, color: roomColor, size: 20),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -130,7 +148,7 @@ class _ShareThreadCardState extends State<ShareThreadCard> {
                         ),
                       ),
                       Text(
-                        'Scan QR or share invite code to sync',
+                        'Scan to join — end-to-end encrypted',
                         style: TextStyle(
                           fontSize: 12,
                           color: colorScheme.onSurfaceVariant,
@@ -148,13 +166,13 @@ class _ShareThreadCardState extends State<ShareThreadCard> {
                   ),
               ],
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 20),
 
-            // Main Body via FutureBuilder
+            // ── FutureBuilder body ────────────────────────────────────────
             FutureBuilder<String>(
               future: _inviteFuture,
               builder: (context, snapshot) {
-                // 1. Loading State
+                // Loading
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 40),
@@ -183,8 +201,10 @@ class _ShareThreadCardState extends State<ShareThreadCard> {
                   );
                 }
 
-                // 2. Error State
-                if (snapshot.hasError || !snapshot.hasData || (snapshot.data ?? '').isEmpty) {
+                // Error
+                if (snapshot.hasError ||
+                    !snapshot.hasData ||
+                    (snapshot.data ?? '').isEmpty) {
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 24),
                     child: Column(
@@ -217,14 +237,7 @@ class _ShareThreadCardState extends State<ShareThreadCard> {
                           ),
                         ),
                         const SizedBox(height: 14),
-                        ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: colorScheme.primary,
-                            foregroundColor: colorScheme.onPrimary,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                          ),
+                        FilledButton.icon(
                           icon: const Icon(Icons.refresh_rounded, size: 18),
                           label: const Text('Retry'),
                           onPressed: _loadInviteCode,
@@ -234,120 +247,157 @@ class _ShareThreadCardState extends State<ShareThreadCard> {
                   );
                 }
 
-                // 3. Success State
+                // Success — run entrance animation once ticket is ready
+                _entranceController.forward();
+
                 final inviteData = snapshot.data!;
                 final displayCode = inviteData.length > 28
                     ? '${inviteData.substring(0, 14)}...${inviteData.substring(inviteData.length - 14)}'
                     : inviteData;
 
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // High-contrast white plate for QR Code
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.15),
-                            blurRadius: 16,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      padding: const EdgeInsets.all(12),
-                      child: QrImageView(
-                        data: inviteData,
-                        size: 200,
-                        version: QrVersions.auto,
-                        eyeStyle: const QrEyeStyle(
-                          eyeShape: QrEyeShape.square,
-                          color: Colors.black,
-                        ),
-                        dataModuleStyle: const QrDataModuleStyle(
-                          dataModuleShape: QrDataModuleShape.square,
-                          color: Colors.black,
-                        ),
-                      ),
+                return AnimatedBuilder(
+                  animation: _entranceController,
+                  builder: (context, child) => FadeTransition(
+                    opacity: _entranceOpacity,
+                    child: ScaleTransition(
+                      scale: _entranceScale,
+                      child: child,
                     ),
-                    const SizedBox(height: 16),
-
-                    // Truncated invite code in monospace pill
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: colorScheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // ── M3 Expressive QR Plate ─────────────────────────
+                      Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: colorScheme.surfaceContainerLowest,
+                          borderRadius: BorderRadius.circular(28),
+                          border: Border.all(
+                            color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+                            width: 1.5,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: colorScheme.shadow.withValues(alpha: 0.08),
+                              blurRadius: 16,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        child: SizedBox(
+                          width: 210,
+                          height: 210,
+                          child: PrettyQrView.data(
+                            data: inviteData,
+                            errorCorrectLevel: QrErrorCorrectLevel.M,
+                            decoration: PrettyQrDecoration(
+                              shape: PrettyQrSmoothSymbol(
+                                color: colorScheme.primary,
+                                roundFactor: 0.8,
+                              ),
+                            ),
+                          ),
                         ),
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
+                      const SizedBox(height: 18),
+
+                      // ── Invite code pill ──────────────────────────────
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.key_rounded,
+                              size: 14,
+                              color: colorScheme.primary,
+                            ),
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: Text(
+                                displayCode,
+                                style: TextStyle(
+                                  fontFamily: 'monospace',
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: colorScheme.onSurface,
+                                  letterSpacing: 0.4,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 18),
+
+                      // ── Action buttons ────────────────────────────────
+                      Row(
                         children: [
-                          Icon(
-                            Icons.key_rounded,
-                            size: 14,
-                            color: colorScheme.onSurfaceVariant,
-                          ),
-                          const SizedBox(width: 8),
-                          Flexible(
-                            child: Text(
-                              displayCode,
-                              style: TextStyle(
-                                fontFamily: 'monospace',
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: colorScheme.onSurface,
-                                letterSpacing: 0.5,
+                          Expanded(
+                            child: FilledButton.tonalIcon(
+                              style: FilledButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(vertical: 13),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
                               ),
-                              overflow: TextOverflow.ellipsis,
+                              icon: AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 200),
+                                child: Icon(
+                                  _copied
+                                      ? Icons.check_circle_rounded
+                                      : Icons.copy_rounded,
+                                  key: ValueKey(_copied),
+                                  size: 17,
+                                ),
+                              ),
+                              label: AnimatedSwitcher(
+                                duration: const Duration(milliseconds: 200),
+                                child: Text(
+                                  _copied ? 'Copied!' : 'Copy Code',
+                                  key: ValueKey(_copied),
+                                  style: const TextStyle(fontSize: 13),
+                                ),
+                              ),
+                              onPressed: () => _copyToClipboard(inviteData),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: colorScheme.primary,
+                                foregroundColor: colorScheme.onPrimary,
+                                elevation: 0,
+                                padding: const EdgeInsets.symmetric(vertical: 13),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                              ),
+                              icon: const Icon(Icons.share_rounded, size: 17),
+                              label: const Text(
+                                'Share Link',
+                                style: TextStyle(fontSize: 13),
+                              ),
+                              onPressed: () => _shareLink(inviteData),
                             ),
                           ),
                         ],
                       ),
-                    ),
-                    const SizedBox(height: 18),
-
-                    // Action Buttons: Copy Invite Code and Share Link
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            style: OutlinedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              side: BorderSide(color: colorScheme.outlineVariant),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                            ),
-                            icon: const Icon(Icons.copy_rounded, size: 16),
-                            label: const Text('Copy Code', style: TextStyle(fontSize: 13)),
-                            onPressed: () => _copyToClipboard(inviteData),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: colorScheme.primary,
-                              foregroundColor: colorScheme.onPrimary,
-                              elevation: 0,
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                            ),
-                            icon: const Icon(Icons.share_rounded, size: 16),
-                            label: const Text('Share Link', style: TextStyle(fontSize: 13)),
-                            onPressed: () => _shareLink(inviteData),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
+                    ],
+                  ),
                 );
               },
             ),

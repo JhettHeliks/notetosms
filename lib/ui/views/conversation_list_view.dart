@@ -9,6 +9,7 @@ import 'package:notetosms/ui/dialogs/room_dialogs.dart';
 import 'package:notetosms/ui/dialogs/settings_dialog.dart';
 import 'package:notetosms/ui/dialogs/update_dialog.dart';
 import 'package:notetosms/ui/dialogs/version_history_dialog.dart';
+import 'package:notetosms/ui/screens/appearance_screen.dart';
 import 'package:notetosms/ui/screens/unlock_vault_screen.dart';
 
 class RoomPreview {
@@ -252,6 +253,10 @@ class _ConversationListViewState extends State<ConversationListView> {
                             context,
                             onRestoreComplete: _loadPreviews,
                           );
+                        } else if (value == 'appearance') {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(builder: (context) => const AppearanceScreen()),
+                          );
                         } else if (value == 'security') {
                           SettingsDialog.showSecurityInfo(context);
                         } else if (value == 'check_updates') {
@@ -288,6 +293,16 @@ class _ConversationListViewState extends State<ConversationListView> {
                               Icon(Icons.backup_rounded, size: 20, color: AppTheme.tertiary),
                               SizedBox(width: 10),
                               Text('Backup & Restore'),
+                            ],
+                          ),
+                        ),
+                        const PopupMenuItem(
+                          value: 'appearance',
+                          child: Row(
+                            children: [
+                              Icon(Icons.palette_outlined, size: 20, color: AppTheme.secondary),
+                              SizedBox(width: 10),
+                              Text('Appearance & Themes'),
                             ],
                           ),
                         ),

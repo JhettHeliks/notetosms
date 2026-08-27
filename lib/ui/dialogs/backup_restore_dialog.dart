@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:share_plus/share_plus.dart';
@@ -12,8 +13,17 @@ class BackupRestoreDialog {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.45),
+      transitionAnimationController: AnimationController(
+        vsync: Navigator.of(context),
+        duration: const Duration(milliseconds: 350),
+        reverseDuration: const Duration(milliseconds: 280),
+      ),
       builder: (bottomSheetCtx) {
-        return _BackupRestoreSheet(onRestoreComplete: onRestoreComplete);
+        return BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+          child: _BackupRestoreSheet(onRestoreComplete: onRestoreComplete),
+        );
       },
     );
   }

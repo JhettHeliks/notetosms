@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:ota_update/ota_update.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path_provider/path_provider.dart';
 
 /// Data model representing a GitHub Release of the application.
 class AppRelease {
@@ -66,6 +68,40 @@ class AppUpdateInfo {
     if (downloadSizeBytes <= 0) return '';
     final mb = downloadSizeBytes / (1024 * 1024);
     return '${mb.toStringAsFixed(1)} MB';
+  }
+}
+
+enum UpdateStatus {
+  idle,
+  downloading,
+  permissionRequired,
+  installing,
+  completed,
+  error,
+}
+
+class UpdateProgressEvent {
+  final UpdateStatus status;
+  final int progressPercent;
+  final int downloadedBytes;
+  final int totalBytes;
+  final String? filePath;
+  final String? errorMessage;
+
+  const UpdateProgressEvent({
+    required this.status,
+    this.progressPercent = 0,
+    this.downloadedBytes = 0,
+    this.totalBytes = 0,
+    this.filePath,
+    this.errorMessage,
+  });
+
+  String get formattedProgress {
+    if (totalBytes <= 0) return '$progressPercent%';
+    final mbDown = (downloadedBytes / (1024 * 1024)).toStringAsFixed(1);
+    final mbTotal = (totalBytes / (1024 * 1024)).toStringAsFixed(1);
+    return '$progressPercent% ($mbDown / $mbTotal MB)';
   }
 }
 
@@ -209,6 +245,144 @@ class UpdateService {
       downloadSizeBytes: apkSize,
       release: latestRelease,
     );
+  }
+
+  static const MethodChannel _updaterChannelPrimary = MethodChannel('com.notetosms/updater');
+  static const MethodChannel _updaterChannelLegacy = MethodChannel('com.chatnotes/updater');
+
+  /// Checks if the app is authorized to request package installations on Android.
+  Future<bool> checkInstallPermission() async {
+    if (kIsWeb || !Platform.isAndroid) return true;
+    try {
+      final bool? result = await _updaterChannelPrimary.invokeMethod<bool>('canRequestPackageInstalls');
+      return result ?? true;
+    } catch (_) {
+      try {
+        final bool? result = await _updaterChannelLegacy.invokeMethod<bool>('canRequestPackageInstalls');
+        return result ?? true;
+      } catch (_) {
+        return true;
+      }
+    }
+  }
+
+  /// Opens the system settings screen for "Install unknown apps".
+  Future<bool> openInstallPermissionSetting() async {
+    if (kIsWeb || !Platform.isAndroid) return true;
+    try {
+      final bool? result = await _updaterChannelPrimary.invokeMethod<bool>('openInstallPermissionSetting');
+      return result ?? false;
+    } catch (_) {
+      try {
+        final bool? result = await _updaterChannelLegacy.invokeMethod<bool>('openInstallPermissionSetting');
+        return result ?? false;
+      } catch (_) {
+        return false;
+      }
+    }
+  }
+
+  /// Triggers the native Android package installer for a downloaded APK file via FileProvider.
+  Future<bool> installApk(String filePath) async {
+    if (kIsWeb || !Platform.isAndroid) {
+      throw UnsupportedError('APK installation is only supported on Android.');
+    }
+    try {
+      final bool? result = await _updaterChannelPrimary.invokeMethod<bool>('installApk', {'filePath': filePath});
+      return result ?? false;
+    } catch (_) {
+      final bool? result = await _updaterChannelLegacy.invokeMethod<bool>('installApk', {'filePath': filePath});
+      return result ?? false;
+    }
+  }
+
+  /// Downloads an APK to cache directory with progress reporting and triggers native installation.
+  Stream<UpdateProgressEvent> downloadAndInstallApk({
+    required String apkDownloadUrl,
+    String destinationFilename = 'notetosms_update.apk',
+  }) async* {
+    if (!kIsWeb && !Platform.isAndroid) {
+      throw UnsupportedError('In-app OTA APK installation is only supported on Android.');
+    }
+
+    final tempDir = await getTemporaryDirectory();
+    final file = File('${tempDir.path}${Platform.pathSeparator}$destinationFilename');
+    if (await file.exists()) {
+      try {
+        await file.delete();
+      } catch (_) {}
+    }
+
+    yield const UpdateProgressEvent(status: UpdateStatus.downloading, progressPercent: 0);
+
+    final client = http.Client();
+    try {
+      final request = http.Request('GET', Uri.parse(apkDownloadUrl));
+      request.headers['User-Agent'] = 'notetosms-updater';
+      final response = await client.send(request);
+
+      if (response.statusCode != 200) {
+        yield UpdateProgressEvent(
+          status: UpdateStatus.error,
+          errorMessage: 'Server responded with HTTP ${response.statusCode}',
+        );
+        return;
+      }
+
+      final contentLength = response.contentLength ?? 0;
+      int downloadedBytes = 0;
+      final sink = file.openWrite();
+
+      await for (final chunk in response.stream) {
+        sink.add(chunk);
+        downloadedBytes += chunk.length;
+        if (contentLength > 0) {
+          final percent = ((downloadedBytes / contentLength) * 100).clamp(0, 99).toInt();
+          yield UpdateProgressEvent(
+            status: UpdateStatus.downloading,
+            progressPercent: percent,
+            downloadedBytes: downloadedBytes,
+            totalBytes: contentLength,
+          );
+        }
+      }
+      await sink.flush();
+      await sink.close();
+
+      yield UpdateProgressEvent(
+        status: UpdateStatus.downloading,
+        progressPercent: 100,
+        downloadedBytes: downloadedBytes,
+        totalBytes: contentLength > 0 ? contentLength : downloadedBytes,
+        filePath: file.path,
+      );
+
+      // Check permission
+      final hasPermission = await checkInstallPermission();
+      if (!hasPermission) {
+        yield UpdateProgressEvent(
+          status: UpdateStatus.permissionRequired,
+          progressPercent: 100,
+          filePath: file.path,
+        );
+        return;
+      }
+
+      yield UpdateProgressEvent(
+        status: UpdateStatus.installing,
+        progressPercent: 100,
+        filePath: file.path,
+      );
+
+      await installApk(file.path);
+    } catch (e) {
+      yield UpdateProgressEvent(
+        status: UpdateStatus.error,
+        errorMessage: e.toString(),
+      );
+    } finally {
+      client.close();
+    }
   }
 
   /// Downloads the APK and triggers Android's package installer intent.

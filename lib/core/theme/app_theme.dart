@@ -33,6 +33,81 @@ class AppTheme {
   static const Color textMuted = Color(0xFF8E9199);
   static const Color border = Color(0xFF44474E);
 
+  static ThemeData buildTheme(ColorScheme colorScheme) {
+    final isDark = colorScheme.brightness == Brightness.dark;
+
+    return ThemeData(
+      useMaterial3: true,
+      brightness: colorScheme.brightness,
+      scaffoldBackgroundColor: isDark ? colorScheme.surfaceContainerLowest : colorScheme.surface,
+      colorScheme: colorScheme,
+      appBarTheme: AppBarTheme(
+        backgroundColor: isDark ? colorScheme.surfaceContainerLowest : colorScheme.surface,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: false,
+        titleTextStyle: TextStyle(
+          fontSize: 19,
+          fontWeight: FontWeight.w600,
+          color: colorScheme.onSurface,
+          letterSpacing: -0.2,
+        ),
+        iconTheme: IconThemeData(color: colorScheme.onSurface),
+      ),
+      cardTheme: CardThemeData(
+        color: isDark ? colorScheme.surfaceContainerLow : colorScheme.surfaceContainerLowest,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(color: colorScheme.outlineVariant.withValues(alpha: 0.5), width: 0.5),
+        ),
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: colorScheme.surfaceContainerHigh,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(28),
+        ),
+        titleTextStyle: TextStyle(
+          fontSize: 20,
+          fontWeight: FontWeight.w600,
+          color: colorScheme.onSurface,
+        ),
+      ),
+      snackBarTheme: SnackBarThemeData(
+        backgroundColor: colorScheme.surfaceContainerHighest,
+        contentTextStyle: TextStyle(color: colorScheme.onSurface, fontSize: 13.5),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        behavior: SnackBarBehavior.floating,
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: colorScheme.surfaceContainerHigh,
+        hintStyle: TextStyle(color: colorScheme.onSurfaceVariant.withValues(alpha: 0.8), fontSize: 15),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(28),
+          borderSide: BorderSide.none,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(28),
+          borderSide: BorderSide.none,
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(28),
+          borderSide: BorderSide(color: colorScheme.primary, width: 1.5),
+        ),
+      ),
+      pageTransitionsTheme: const PageTransitionsTheme(
+        builders: {
+          TargetPlatform.android: PredictiveBackPageTransitionsBuilder(),
+          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.fuchsia: ZoomPageTransitionsBuilder(),
+        },
+      ),
+    );
+  }
+
   static ThemeData get darkTheme {
     final colorScheme = ColorScheme.fromSeed(
       seedColor: seedColor,
@@ -61,68 +136,14 @@ class AppTheme {
       outlineVariant: surfaceContainerHigh,
     );
 
-    return ThemeData(
-      useMaterial3: true,
-      brightness: Brightness.dark,
-      scaffoldBackgroundColor: surfaceContainerLowest,
-      colorScheme: colorScheme,
-      appBarTheme: AppBarTheme(
-        backgroundColor: surfaceContainerLowest,
-        surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        centerTitle: false,
-        titleTextStyle: const TextStyle(
-          fontSize: 19,
-          fontWeight: FontWeight.w600,
-          color: textPrimary,
-          letterSpacing: -0.2,
-        ),
-        iconTheme: const IconThemeData(color: textPrimary),
-      ),
-      cardTheme: CardThemeData(
-        color: surfaceContainerLow,
-        elevation: 0,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-          side: const BorderSide(color: border, width: 0.5),
-        ),
-      ),
-      dialogTheme: DialogThemeData(
-        backgroundColor: surfaceContainerHigh,
-        surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(28),
-        ),
-        titleTextStyle: const TextStyle(
-          fontSize: 20,
-          fontWeight: FontWeight.w600,
-          color: textPrimary,
-        ),
-      ),
-      snackBarTheme: SnackBarThemeData(
-        backgroundColor: surfaceContainerHighest,
-        contentTextStyle: const TextStyle(color: textPrimary, fontSize: 13.5),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        behavior: SnackBarBehavior.floating,
-      ),
-      inputDecorationTheme: InputDecorationTheme(
-        filled: true,
-        fillColor: surfaceContainerHigh,
-        hintStyle: const TextStyle(color: textMuted, fontSize: 15),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(28),
-          borderSide: BorderSide.none,
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(28),
-          borderSide: BorderSide.none,
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(28),
-          borderSide: const BorderSide(color: primary, width: 1.5),
-        ),
-      ),
+    return buildTheme(colorScheme);
+  }
+
+  static ThemeData get lightTheme {
+    final colorScheme = ColorScheme.fromSeed(
+      seedColor: seedColor,
+      brightness: Brightness.light,
     );
+    return buildTheme(colorScheme);
   }
 }

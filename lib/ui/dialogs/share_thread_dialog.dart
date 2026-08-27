@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:notetosms/core/theme/app_theme.dart';
 import 'package:notetosms/services/vault_service.dart';
 import 'package:notetosms/src/rust/storage.dart';
-import 'package:qr_flutter/qr_flutter.dart';
+import 'package:pretty_qr_code/pretty_qr_code.dart';
 import 'package:share_plus/share_plus.dart';
 
 class ShareThreadDialog extends StatefulWidget {
@@ -109,8 +109,10 @@ class _ShareThreadDialogState extends State<ShareThreadDialog> {
       content: FutureBuilder<String>(
         future: _inviteFuture,
         builder: (context, snapshot) {
+          Widget body;
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return Padding(
+            body = Padding(
+              key: const ValueKey('loading'),
               padding: const EdgeInsets.symmetric(vertical: 36),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -124,10 +126,9 @@ class _ShareThreadDialogState extends State<ShareThreadDialog> {
                 ],
               ),
             );
-          }
-
-          if (snapshot.hasError) {
-            return Column(
+          } else if (snapshot.hasError) {
+            body = Column(
+              key: const ValueKey('error'),
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(Icons.error_outline_rounded, size: 40, color: colorScheme.error),
@@ -139,39 +140,43 @@ class _ShareThreadDialogState extends State<ShareThreadDialog> {
                 ),
               ],
             );
-          }
-
-          final inviteData = snapshot.data ?? '';
-
-          return SingleChildScrollView(
+          } else {
+            final inviteData = snapshot.data ?? '';
+            body = SingleChildScrollView(
+              key: const ValueKey('qr_ready'),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 // QR Code Container
                 Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(18),
                   decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
+                    color: colorScheme.surfaceContainerLowest,
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(
+                      color: colorScheme.outlineVariant.withValues(alpha: 0.5),
+                      width: 1.5,
+                    ),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.15),
+                        color: colorScheme.shadow.withValues(alpha: 0.08),
                         blurRadius: 16,
                         offset: const Offset(0, 4),
                       ),
                     ],
                   ),
-                  child: QrImageView(
-                    data: inviteData,
-                    size: 200,
-                    version: QrVersions.auto,
-                    eyeStyle: const QrEyeStyle(
-                      eyeShape: QrEyeShape.square,
-                      color: Colors.black,
-                    ),
-                    dataModuleStyle: const QrDataModuleStyle(
-                      dataModuleShape: QrDataModuleShape.square,
-                      color: Colors.black,
+                  child: SizedBox(
+                    width: 200,
+                    height: 200,
+                    child: PrettyQrView.data(
+                      data: inviteData,
+                      errorCorrectLevel: QrErrorCorrectLevel.M,
+                      decoration: PrettyQrDecoration(
+                        shape: PrettyQrSmoothSymbol(
+                          color: colorScheme.primary,
+                          roundFactor: 0.8,
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -287,8 +292,22 @@ class _ShareThreadDialogState extends State<ShareThreadDialog> {
                     ),
                   ],
                 ),
-              ],
-            ),
+                ],
+              ),
+            );
+          }
+
+          return AnimatedSwitcher(
+            duration: const Duration(milliseconds: 300),
+            transitionBuilder: (child, animation) {
+              return ScaleTransition(
+                scale: Tween<double>(begin: 0.85, end: 1.0).animate(
+                  CurvedAnimation(parent: animation, curve: Curves.easeOutBack),
+                ),
+                child: FadeTransition(opacity: animation, child: child),
+              );
+            },
+            child: body,
           );
         },
       ),

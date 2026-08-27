@@ -7,27 +7,33 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.annotation.NonNull
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
+import androidx.core.content.FileProvider
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 open class MainActivity : FlutterActivity() {
     private val BUBBLE_CHANNEL_PRIMARY = "com.notetosms/bubbles"
     private val BUBBLE_CHANNEL_LEGACY = "com.chatnotes/bubbles"
+    private val UPDATER_CHANNEL_PRIMARY = "com.notetosms/updater"
+    private val UPDATER_CHANNEL_LEGACY = "com.chatnotes/updater"
     private val NOTIFICATION_CHANNEL_ID = "notetosms_bubble_conversations"
     private val NOTIFICATION_CHANNEL_NAME = "Note Bubbles"
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        val handler = MethodChannel.MethodCallHandler { call, result ->
+        // 1. Bubble MethodChannel handler
+        val bubbleHandler = MethodChannel.MethodCallHandler { call, result ->
             when (call.method) {
                 "bubbleRoom" -> {
                     val roomId = call.argument<String>("roomId") ?: "general"
@@ -50,10 +56,74 @@ open class MainActivity : FlutterActivity() {
         }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BUBBLE_CHANNEL_PRIMARY)
-            .setMethodCallHandler(handler)
-
+            .setMethodCallHandler(bubbleHandler)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BUBBLE_CHANNEL_LEGACY)
-            .setMethodCallHandler(handler)
+            .setMethodCallHandler(bubbleHandler)
+
+        // 2. APK Updater & Installer MethodChannel handler
+        val updaterHandler = MethodChannel.MethodCallHandler { call, result ->
+            when (call.method) {
+                "canRequestPackageInstalls" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        result.success(packageManager.canRequestPackageInstalls())
+                    } else {
+                        result.success(true)
+                    }
+                }
+                "openInstallPermissionSetting" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        try {
+                            val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                                data = Uri.parse("package:$packageName")
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            startActivity(intent)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("SETTING_ERROR", e.localizedMessage, e.stackTraceToString())
+                        }
+                    } else {
+                        result.success(true)
+                    }
+                }
+                "installApk" -> {
+                    val filePath = call.argument<String>("filePath")
+                    if (filePath.isNullOrBlank()) {
+                        result.error("INVALID_ARGUMENT", "File path cannot be empty", null)
+                        return@MethodCallHandler
+                    }
+
+                    val file = File(filePath)
+                    if (!file.exists()) {
+                        result.error("FILE_NOT_FOUND", "APK file does not exist at $filePath", null)
+                        return@MethodCallHandler
+                    }
+
+                    try {
+                        val uri = FileProvider.getUriForFile(
+                            this,
+                            "${applicationContext.packageName}.fileprovider",
+                            file
+                        )
+                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                            setDataAndType(uri, "application/vnd.android.package-archive")
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        startActivity(intent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("INSTALL_ERROR", e.localizedMessage, e.stackTraceToString())
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, UPDATER_CHANNEL_PRIMARY)
+            .setMethodCallHandler(updaterHandler)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, UPDATER_CHANNEL_LEGACY)
+            .setMethodCallHandler(updaterHandler)
     }
 
     private fun createBubbleNotification(roomId: String, roomName: String, iconName: String) {

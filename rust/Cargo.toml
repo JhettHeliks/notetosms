@@ -23,6 +23,7 @@ futures = "0.3"
 chrono = "0.4"
 iroh = { version = "0.28", default-features = false }
 iroh-net = "0.28"
+flate2 = "1.0"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

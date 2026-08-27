@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:notetosms/core/theme/app_theme.dart';
+import 'package:notetosms/ui/widgets/motion/bouncy_pressable.dart';
 
 class MessageInputBar extends StatefulWidget {
   final String roomName;
@@ -227,25 +228,25 @@ class _MessageInputBarState extends State<MessageInputBar> {
                 ),
               ),
               const SizedBox(width: 8),
-              SizedBox(
-                width: 48,
-                height: 48,
-                child: Material(
-                  color: _canSend ? colorScheme.primary : colorScheme.surfaceContainerHigh,
-                  shape: const CircleBorder(),
-                  elevation: _canSend ? 2 : 0,
-                  child: InkWell(
-                    customBorder: const CircleBorder(),
-                    onTap: _canSend
-                        ? _send
-                        : () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Type a note or checklist item above.'),
-                                duration: Duration(seconds: 1),
-                              ),
-                            );
-                          },
+              BouncyPressable(
+                enableHaptic: false,
+                onTap: _canSend
+                    ? _send
+                    : () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Type a note or checklist item above.'),
+                            duration: Duration(seconds: 1),
+                          ),
+                        );
+                      },
+                child: SizedBox(
+                  width: 48,
+                  height: 48,
+                  child: Material(
+                    color: _canSend ? colorScheme.primary : colorScheme.surfaceContainerHigh,
+                    shape: const CircleBorder(),
+                    elevation: _canSend ? 2 : 0,
                     child: Center(
                       child: AnimatedSwitcher(
                         duration: const Duration(milliseconds: 200),
@@ -284,8 +285,7 @@ class _MessageInputBarState extends State<MessageInputBar> {
     required Color color,
     required VoidCallback onTap,
   }) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(12),
+    return BouncyPressable(
       onTap: onTap,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
