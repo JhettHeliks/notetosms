@@ -5,6 +5,7 @@ import 'package:notetosms/services/update_service.dart';
 import 'package:notetosms/services/vault_service.dart';
 import 'package:notetosms/src/rust/storage.dart';
 import 'package:notetosms/ui/dialogs/backup_restore_dialog.dart';
+import 'package:notetosms/ui/dialogs/profile_dialog.dart';
 import 'package:notetosms/ui/dialogs/room_dialogs.dart';
 import 'package:notetosms/ui/dialogs/settings_dialog.dart';
 import 'package:notetosms/ui/dialogs/update_dialog.dart';
@@ -98,25 +99,28 @@ class _ConversationListViewState extends State<ConversationListView> {
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to load conversations: $e')),
-        );
       }
     }
   }
 
   Future<void> _handleLockVault() async {
-    await VaultService.instance.lock();
-    if (mounted) {
-      Navigator.of(context).pushReplacement(
-        PageRouteBuilder(
-          pageBuilder: (context, animation, secondaryAnimation) => const UnlockVaultScreen(),
-          transitionsBuilder: (context, animation, secondaryAnimation, child) {
-            return FadeTransition(opacity: animation, child: child);
-          },
-          transitionDuration: const Duration(milliseconds: 300),
-        ),
-      );
+    try {
+      await VaultService.instance.lock();
+      if (mounted) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (context) => const UnlockVaultScreen()),
+          (route) => false,
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to lock vault: $e'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
     }
   }
 
@@ -134,26 +138,25 @@ class _ConversationListViewState extends State<ConversationListView> {
         return Icons.star_outline;
       case 'fitness':
         return Icons.fitness_center;
+      case 'rocket_launch':
+        return Icons.rocket_launch_rounded;
+      case 'chat_bubble':
       default:
         return Icons.chat_bubble_outline;
     }
   }
 
   String _formatTimestamp(int timestampMs) {
-    if (timestampMs == 0) return '';
     final date = DateTime.fromMillisecondsSinceEpoch(timestampMs);
     final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final noteDay = DateTime(date.year, date.month, date.day);
+    final diff = now.difference(date);
 
-    if (noteDay == today) {
-      return DateFormat('h:mm a').format(date);
-    } else if (noteDay == today.subtract(const Duration(days: 1))) {
-      return 'Yesterday';
-    } else if (now.year == date.year) {
-      return DateFormat('MMM d').format(date);
+    if (diff.inDays == 0 && date.day == now.day) {
+      return DateFormat.jm().format(date);
+    } else if (diff.inDays < 7) {
+      return DateFormat.E().format(date);
     } else {
-      return DateFormat('MM/dd/yy').format(date);
+      return DateFormat.MMMd().format(date);
     }
   }
 
@@ -161,36 +164,35 @@ class _ConversationListViewState extends State<ConversationListView> {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
 
-    final filteredPreviews = _previews.filter((preview) {
-      if (_searchQuery.trim().isEmpty) return true;
-      final q = _searchQuery.toLowerCase();
-      final nameMatches = preview.room.name.toLowerCase().contains(q);
-      final noteMatches =
-          preview.latestNote?.content.toLowerCase().contains(q) ?? false;
-      return nameMatches || noteMatches;
-    });
+    final filteredPreviews = _previews.where((p) {
+      if (_searchQuery.isEmpty) return true;
+      final query = _searchQuery.toLowerCase();
+      final roomMatch = p.room.name.toLowerCase().contains(query);
+      final noteMatch = p.latestNote?.content.toLowerCase().contains(query) ?? false;
+      return roomMatch || noteMatch;
+    }).toList();
 
     return Scaffold(
       backgroundColor: colorScheme.surface,
       body: SafeArea(
         child: Column(
           children: [
-            // Top Search Bar (Google Messages Pill Header)
+            // Header: Search Bar & Actions
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
               child: Container(
-                height: 50,
+                height: 48,
                 decoration: BoxDecoration(
-                  color: colorScheme.surfaceContainerHigh,
-                  borderRadius: BorderRadius.circular(28),
+                  color: colorScheme.surfaceContainerLow,
+                  borderRadius: BorderRadius.circular(24),
                 ),
+                padding: const EdgeInsets.symmetric(horizontal: 14),
                 child: Row(
                   children: [
-                    const SizedBox(width: 14),
                     Icon(
-                      Icons.search_rounded,
+                      Icons.search,
                       color: colorScheme.onSurfaceVariant,
-                      size: 22,
+                      size: 20,
                     ),
                     const SizedBox(width: 10),
                     Expanded(
@@ -234,7 +236,9 @@ class _ConversationListViewState extends State<ConversationListView> {
                       ),
                       color: colorScheme.surfaceContainerHigh,
                       onSelected: (value) {
-                        if (value == 'security') {
+                        if (value == 'profile') {
+                          ProfileDialog.show(context);
+                        } else if (value == 'security') {
                           SettingsDialog.showSecurityInfo(context);
                         } else if (value == 'passphrase') {
                           SettingsDialog.showChangePassphrase(context);
@@ -257,8 +261,6 @@ class _ConversationListViewState extends State<ConversationListView> {
                           Navigator.of(context).push(
                             MaterialPageRoute(builder: (context) => const AppearanceScreen()),
                           );
-                        } else if (value == 'security') {
-                          SettingsDialog.showSecurityInfo(context);
                         } else if (value == 'check_updates') {
                           VersionHistoryDialog.show(context);
                         } else if (value == 'lock') {
@@ -266,6 +268,16 @@ class _ConversationListViewState extends State<ConversationListView> {
                         }
                       },
                       itemBuilder: (context) => [
+                        const PopupMenuItem(
+                          value: 'profile',
+                          child: Row(
+                            children: [
+                              Icon(Icons.account_circle_outlined, size: 20, color: AppTheme.tertiary),
+                              SizedBox(width: 10),
+                              Text('User Profile & Handle'),
+                            ],
+                          ),
+                        ),
                         const PopupMenuItem(
                           value: 'new_room',
                           child: Row(
@@ -630,17 +642,5 @@ class _ConversationListViewState extends State<ConversationListView> {
         ],
       ),
     );
-  }
-}
-
-extension _ListFilter<T> on List<T> {
-  List<T> filter(bool Function(T) test) {
-    final result = <T>[];
-    for (final element in this) {
-      if (test(element)) {
-        result.add(element);
-      }
-    }
-    return result;
   }
 }

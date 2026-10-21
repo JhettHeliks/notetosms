@@ -214,6 +214,52 @@ class VaultService {
   Future<String> getP2PDisplayName() async {
     return rust_api.getP2PDisplayName();
   }
+
+  Future<String> getLocalNodeId() async {
+    return rust_api.getLocalNodeId();
+  }
+
+  Future<UserProfile> getUserProfile() async {
+    return rust_api.getUserProfile();
+  }
+
+  Future<void> saveUserProfile({
+    required String displayName,
+    required int avatarColor,
+    required String avatarIcon,
+  }) async {
+    await rust_api.saveUserProfile(
+      displayName: displayName,
+      avatarColor: avatarColor,
+      avatarIcon: avatarIcon,
+    );
+  }
+
+  Future<void> setRoomBackgroundSync({
+    required String roomId,
+    required bool enabled,
+  }) async {
+    await rust_api.setRoomBackgroundSync(
+      roomId: roomId,
+      enabled: enabled,
+    );
+  }
+
+  Future<void> bootP2pNetwork() async {
+    try {
+      await rust_api.bootP2PNetwork();
+    } catch (e) {
+      debugPrint('Error booting P2P network: $e');
+    }
+  }
+
+  Future<void> disconnectAllPeers() async {
+    try {
+      await rust_api.disconnectAllPeers();
+    } catch (e) {
+      debugPrint('Error disconnecting P2P peers: $e');
+    }
+  }
 }
 
 

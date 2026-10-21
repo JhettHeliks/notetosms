@@ -65,6 +65,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<RoomItem> dco_decode_list_room_item(dynamic raw);
 
   @protected
+  List<SharedRoomInfo> dco_decode_list_shared_room_info(dynamic raw);
+
+  @protected
   NoteItem dco_decode_note_item(dynamic raw);
 
   @protected
@@ -92,6 +95,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RoomItem dco_decode_room_item(dynamic raw);
 
   @protected
+  SharedRoomInfo dco_decode_shared_room_info(dynamic raw);
+
+  @protected
   int dco_decode_u_32(dynamic raw);
 
   @protected
@@ -99,6 +105,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void dco_decode_unit(dynamic raw);
+
+  @protected
+  UserProfile dco_decode_user_profile(dynamic raw);
 
   @protected
   VaultStatus dco_decode_vault_status(dynamic raw);
@@ -150,6 +159,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<RoomItem> sse_decode_list_room_item(SseDeserializer deserializer);
 
   @protected
+  List<SharedRoomInfo> sse_decode_list_shared_room_info(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   NoteItem sse_decode_note_item(SseDeserializer deserializer);
 
   @protected
@@ -177,6 +191,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RoomItem sse_decode_room_item(SseDeserializer deserializer);
 
   @protected
+  SharedRoomInfo sse_decode_shared_room_info(SseDeserializer deserializer);
+
+  @protected
   int sse_decode_u_32(SseDeserializer deserializer);
 
   @protected
@@ -184,6 +201,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_decode_unit(SseDeserializer deserializer);
+
+  @protected
+  UserProfile sse_decode_user_profile(SseDeserializer deserializer);
 
   @protected
   VaultStatus sse_decode_vault_status(SseDeserializer deserializer);
@@ -249,6 +269,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_list_room_item(List<RoomItem> self, SseSerializer serializer);
 
   @protected
+  void sse_encode_list_shared_room_info(
+    List<SharedRoomInfo> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_note_item(NoteItem self, SseSerializer serializer);
 
   @protected
@@ -282,6 +308,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_room_item(RoomItem self, SseSerializer serializer);
 
   @protected
+  void sse_encode_shared_room_info(
+    SharedRoomInfo self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_u_32(int self, SseSerializer serializer);
 
   @protected
@@ -289,6 +321,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_unit(void self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_user_profile(UserProfile self, SseSerializer serializer);
 
   @protected
   void sse_encode_vault_status(VaultStatus self, SseSerializer serializer);

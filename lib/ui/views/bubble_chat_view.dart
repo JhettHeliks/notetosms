@@ -110,6 +110,7 @@ class _BubbleChatViewState extends State<BubbleChatView> {
           color: 0xFF1A73E8,
           createdAt: 0,
           sortOrder: 0,
+          isBackgroundSyncEnabled: true,
         ),
       );
 

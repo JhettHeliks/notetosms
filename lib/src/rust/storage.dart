@@ -15,6 +15,8 @@ class NoteItem {
   final bool isCompleted;
   final bool isPinned;
   final List<String> tags;
+  final String? authorId;
+  final String? authorName;
 
   const NoteItem({
     required this.id,
@@ -25,6 +27,8 @@ class NoteItem {
     required this.isCompleted,
     required this.isPinned,
     required this.tags,
+    this.authorId,
+    this.authorName,
   });
 
   @override
@@ -36,7 +40,9 @@ class NoteItem {
       isTodo.hashCode ^
       isCompleted.hashCode ^
       isPinned.hashCode ^
-      tags.hashCode;
+      tags.hashCode ^
+      authorId.hashCode ^
+      authorName.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -50,7 +56,9 @@ class NoteItem {
           isTodo == other.isTodo &&
           isCompleted == other.isCompleted &&
           isPinned == other.isPinned &&
-          tags == other.tags;
+          tags == other.tags &&
+          authorId == other.authorId &&
+          authorName == other.authorName;
 }
 
 class RoomInvite {
@@ -103,6 +111,9 @@ class RoomItem {
   final int color;
   final PlatformInt64 createdAt;
   final int sortOrder;
+  final String? encryptionKey;
+  final String? shareTicket;
+  final bool isBackgroundSyncEnabled;
 
   const RoomItem({
     required this.id,
@@ -111,6 +122,9 @@ class RoomItem {
     required this.color,
     required this.createdAt,
     required this.sortOrder,
+    this.encryptionKey,
+    this.shareTicket,
+    required this.isBackgroundSyncEnabled,
   });
 
   @override
@@ -120,7 +134,10 @@ class RoomItem {
       icon.hashCode ^
       color.hashCode ^
       createdAt.hashCode ^
-      sortOrder.hashCode;
+      sortOrder.hashCode ^
+      encryptionKey.hashCode ^
+      shareTicket.hashCode ^
+      isBackgroundSyncEnabled.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -132,7 +149,66 @@ class RoomItem {
           icon == other.icon &&
           color == other.color &&
           createdAt == other.createdAt &&
-          sortOrder == other.sortOrder;
+          sortOrder == other.sortOrder &&
+          encryptionKey == other.encryptionKey &&
+          shareTicket == other.shareTicket &&
+          isBackgroundSyncEnabled == other.isBackgroundSyncEnabled;
+}
+
+class SharedRoomInfo {
+  final String roomId;
+  final String encryptionKey;
+  final bool isBackgroundSyncEnabled;
+  final String? shareTicket;
+
+  const SharedRoomInfo({
+    required this.roomId,
+    required this.encryptionKey,
+    required this.isBackgroundSyncEnabled,
+    this.shareTicket,
+  });
+
+  @override
+  int get hashCode =>
+      roomId.hashCode ^
+      encryptionKey.hashCode ^
+      isBackgroundSyncEnabled.hashCode ^
+      shareTicket.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SharedRoomInfo &&
+          runtimeType == other.runtimeType &&
+          roomId == other.roomId &&
+          encryptionKey == other.encryptionKey &&
+          isBackgroundSyncEnabled == other.isBackgroundSyncEnabled &&
+          shareTicket == other.shareTicket;
+}
+
+class UserProfile {
+  final String displayName;
+  final int avatarColor;
+  final String avatarIcon;
+
+  const UserProfile({
+    required this.displayName,
+    required this.avatarColor,
+    required this.avatarIcon,
+  });
+
+  @override
+  int get hashCode =>
+      displayName.hashCode ^ avatarColor.hashCode ^ avatarIcon.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is UserProfile &&
+          runtimeType == other.runtimeType &&
+          displayName == other.displayName &&
+          avatarColor == other.avatarColor &&
+          avatarIcon == other.avatarIcon;
 }
 
 class VaultStatus {

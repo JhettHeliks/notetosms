@@ -1,8 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use base64::{
-    engine::general_purpose::{STANDARD as BASE64, URL_SAFE_NO_PAD as BASE64_URL},
-    Engine,
-};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chacha20poly1305::{
     aead::{Aead, KeyInit},
     ChaCha20Poly1305, Key, Nonce,
@@ -18,7 +15,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, Mutex, RwLock};
 
-pub use crate::p2p_protocol::{EncryptedNotePayload, RoomEvent, RoomShareTicket, SyncPacket};
+pub use crate::p2p_protocol::{
+    decode_ticket_payload, hex_prefix, EncryptedNotePayload, RoomEvent, RoomShareTicket,
+    SyncPacket, TICKET_VERSION_COMPACT,
+};
 use crate::storage::NoteItem;
 
 pub const P2P_ALPN: &[u8] = b"notetosms/p2p/v2";
@@ -203,6 +203,32 @@ impl P2pNode {
             room_event_senders: Arc::new(RwLock::new(HashMap::new())),
         };
 
+        // Restore custom user profile display name if set
+        if let Ok(profile) = crate::api::notes::get_user_profile() {
+            node.set_display_name(profile.display_name).await;
+        }
+
+        // Restore shared room keys and initiate background sync for active threads
+        if let Ok(shared_rooms) = crate::api::notes::get_shared_rooms_with_keys() {
+            for r in shared_rooms {
+                if let Ok(key_bytes_vec) = BASE64.decode(&r.encryption_key) {
+                    if key_bytes_vec.len() == 32 {
+                        let mut k = [0u8; 32];
+                        k.copy_from_slice(&key_bytes_vec);
+                        node.register_shared_room(r.room_id.clone(), k).await;
+                    }
+                }
+                if r.is_background_sync_enabled {
+                    if let Some(ticket_str) = r.share_ticket {
+                        let node_clone = node.clone();
+                        crate::get_runtime().spawn(async move {
+                            let _ = node_clone.import_room_ticket(ticket_str).await;
+                        });
+                    }
+                }
+            }
+        }
+
         // Spawn listener loop
         let listener_node = node.clone();
         crate::get_runtime().spawn(async move {
@@ -258,7 +284,13 @@ impl P2pNode {
     pub async fn get_peer_counts(&self, room_id: &str) -> (i32, i32) {
         let active_count = {
             let peers = self.active_peers.read().await;
-            peers.get(room_id).map(|p| p.len() as i32).unwrap_or(0) + 1 // +1 for local self
+            let mut unique_peers = std::collections::HashSet::new();
+            if let Some(list) = peers.get(room_id) {
+                for p in list {
+                    unique_peers.insert(&p.peer_id);
+                }
+            }
+            unique_peers.len() as i32 + 1 // +1 for local self
         };
 
         let total_count = {
@@ -294,10 +326,41 @@ impl P2pNode {
                 peer_node_id: remote_id,
                 room_id,
                 display_name: remote_display_name,
+                key_fingerprint,
             } => {
-                let has_room = {
+                let (has_room, matched_room_id, matched_room_name) = {
                     let rooms = self.shared_rooms.read().await;
-                    rooms.contains_key(&room_id)
+                    if let Some(_k) = rooms.get(&room_id) {
+                        let r_name = crate::api::notes::get_room_by_id(&room_id)
+                            .ok()
+                            .map(|r| r.name)
+                            .unwrap_or_else(|| room_id.clone());
+                        (true, room_id.clone(), r_name)
+                    } else if let Ok(all_rooms) = crate::api::notes::get_shared_rooms_with_keys() {
+                        let mut found = None;
+                        for r in all_rooms {
+                            if let Ok(k_bytes) = BASE64.decode(&r.encryption_key) {
+                                if k_bytes.len() == 32 {
+                                    let fp = hex_prefix(&k_bytes[0..8]);
+                                    if key_fingerprint.as_deref() == Some(&fp) || r.room_id == room_id {
+                                        let r_name = crate::api::notes::get_room_by_id(&r.room_id)
+                                            .ok()
+                                            .map(|room| room.name)
+                                            .unwrap_or_else(|| r.room_id.clone());
+                                        found = Some((r.room_id.clone(), r_name));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if let Some((r_id, r_name)) = found {
+                            (true, r_id, r_name)
+                        } else {
+                            (false, room_id.clone(), room_id.clone())
+                        }
+                    } else {
+                        (false, room_id.clone(), room_id.clone())
+                    }
                 };
 
                 let my_display_name = self.get_display_name().await;
@@ -310,6 +373,8 @@ impl P2pNode {
                             status: "Room not registered or key missing on host".into(),
                             host_node_id: self.node_id().to_string(),
                             display_name: my_display_name,
+                            room_id: None,
+                            room_name: None,
                         },
                     )
                     .await?;
@@ -323,6 +388,8 @@ impl P2pNode {
                         status: "OK".into(),
                         host_node_id: self.node_id().to_string(),
                         display_name: my_display_name,
+                        room_id: Some(matched_room_id.clone()),
+                        room_name: Some(matched_room_name),
                     },
                 )
                 .await?;
@@ -336,37 +403,39 @@ impl P2pNode {
 
                 {
                     let mut peers = self.active_peers.write().await;
-                    peers.entry(room_id.clone()).or_default().push(active_peer);
+                    let list = peers.entry(matched_room_id.clone()).or_default();
+                    list.retain(|p| p.peer_id != remote_id && p.connection.stable_id() != connection.stable_id());
+                    list.push(active_peer);
                 }
 
                 let is_new = {
                     let mut known = self.known_members.write().await;
-                    let map = known.entry(room_id.clone()).or_default();
+                    let map = known.entry(matched_room_id.clone()).or_default();
                     let is_new = !map.contains_key(&remote_id);
                     map.insert(remote_id.clone(), remote_display_name.clone());
                     map.insert(self.node_id().to_string(), self.get_display_name().await);
                     is_new
                 };
 
-                let (total, online) = self.get_peer_counts(&room_id).await;
+                let (total, online) = self.get_peer_counts(&matched_room_id).await;
 
-                let _ = self.legacy_event_sender.send(P2pEvent::peer_connected(remote_id.clone(), room_id.clone()));
+                let _ = self.legacy_event_sender.send(P2pEvent::peer_connected(remote_id.clone(), matched_room_id.clone()));
                 if is_new {
-                    self.emit_room_event(&room_id, RoomEvent::peer_joined(
-                        room_id.clone(),
+                    self.emit_room_event(&matched_room_id, RoomEvent::peer_joined(
+                        matched_room_id.clone(),
                         remote_id.clone(),
                         remote_display_name.clone(),
                     )).await;
                 }
-                self.emit_room_event(&room_id, RoomEvent::active_peer_count(
-                    room_id.clone(),
+                self.emit_room_event(&matched_room_id, RoomEvent::active_peer_count(
+                    matched_room_id.clone(),
                     total,
                     online,
                 )).await;
 
                 // Spawn incoming streams loop for this connection
                 let stream_node = self.clone();
-                let stream_room_id = room_id.clone();
+                let stream_room_id = matched_room_id.clone();
                 let stream_peer_id = remote_id.clone();
                 crate::get_runtime().spawn(async move {
                     let _ = stream_node
@@ -407,7 +476,7 @@ impl P2pNode {
         {
             let mut peers = self.active_peers.write().await;
             if let Some(list) = peers.get_mut(&room_id) {
-                list.retain(|p| p.connection.stable_id() != connection.stable_id());
+                list.retain(|p| p.peer_id != peer_id && p.connection.stable_id() != connection.stable_id());
             }
         }
 
@@ -449,8 +518,42 @@ impl P2pNode {
         }
 
         match packet {
-            SyncPacket::PresenceHeartbeat { .. } => {
+            SyncPacket::PresenceHeartbeat { room_id: pkt_room_id, peer_id: _remote_id, .. } => {
+                // Respond with heartbeat ACK
+                if pkt_room_id == room_id {
+                    let ack = SyncPacket::PresenceHeartbeatAck {
+                        room_id: room_id.to_string(),
+                        peer_id: self.node_id().to_string(),
+                    };
+                    let _ = write_packet_and_finish(send, &ack).await;
+                }
+            }
+            SyncPacket::PresenceHeartbeatAck { .. } => {
                 // Heartbeat touched last_seen above
+            }
+            SyncPacket::PeerDisconnecting {
+                room_id: pkt_room_id,
+                peer_id: remote_id,
+            } => {
+                if pkt_room_id == room_id {
+                    {
+                        let mut peers = self.active_peers.write().await;
+                        if let Some(list) = peers.get_mut(room_id) {
+                            list.retain(|p| p.peer_id != remote_id);
+                        }
+                    }
+                    let (total, online) = self.get_peer_counts(room_id).await;
+                    let _ = self.legacy_event_sender.send(P2pEvent::peer_disconnected(remote_id.clone(), room_id.to_string()));
+                    self.emit_room_event(room_id, RoomEvent::peer_left(
+                        room_id.to_string(),
+                        remote_id,
+                    )).await;
+                    self.emit_room_event(room_id, RoomEvent::active_peer_count(
+                        room_id.to_string(),
+                        total,
+                        online,
+                    )).await;
+                }
             }
             SyncPacket::PeerJoin {
                 room_id: pkt_room_id,
@@ -516,7 +619,8 @@ impl P2pNode {
                                         is_completed: n.is_completed,
                                         is_pinned: n.is_pinned,
                                         tags: n.tags,
-                                        author_id: None,
+                                        author_id: n.author_id,
+                                        author_name: n.author_name,
                                     });
                                 }
                             }
@@ -542,6 +646,9 @@ impl P2pNode {
                         };
 
                         for note in notes {
+                            let note_author_id = note.author_id.as_deref().or(Some(peer_id));
+                            let note_author_name = note.author_name.as_deref().or(sender_dn.as_deref());
+
                             if let Ok(plaintext) = decrypt_shared_content(&note.ciphertext, &note.nonce, &key_bytes) {
                                 if let Ok(saved_item) = crate::api::notes::upsert_synced_note(
                                     &note.id,
@@ -551,6 +658,8 @@ impl P2pNode {
                                     note.is_todo,
                                     note.is_completed,
                                     note.is_pinned,
+                                    note_author_id,
+                                    note_author_name,
                                 ) {
                                     let _ = self.legacy_event_sender.send(P2pEvent::note_received(
                                         saved_item.id.clone(),
@@ -565,7 +674,7 @@ impl P2pNode {
                                         room_id.to_string(),
                                         saved_item,
                                         Some(peer_id.to_string()),
-                                        sender_dn.clone(),
+                                        note_author_name.map(|s| s.to_string()),
                                     )).await;
                                 }
                             }
@@ -584,6 +693,9 @@ impl P2pNode {
                             known.get(room_id).and_then(|m| m.get(peer_id).cloned())
                         };
 
+                        let note_author_id = note.author_id.as_deref().or(Some(peer_id));
+                        let note_author_name = note.author_name.as_deref().or(sender_dn.as_deref());
+
                         if let Ok(plaintext) = decrypt_shared_content(&note.ciphertext, &note.nonce, &key_bytes) {
                             if let Ok(saved_item) = crate::api::notes::upsert_synced_note(
                                 &note.id,
@@ -593,6 +705,8 @@ impl P2pNode {
                                 note.is_todo,
                                 note.is_completed,
                                 note.is_pinned,
+                                note_author_id,
+                                note_author_name,
                             ) {
                                 let _ = self.legacy_event_sender.send(P2pEvent::note_received(
                                     saved_item.id.clone(),
@@ -607,7 +721,7 @@ impl P2pNode {
                                     room_id.to_string(),
                                     saved_item,
                                     Some(peer_id.to_string()),
-                                    sender_dn,
+                                    note_author_name.map(|s| s.to_string()),
                                 )).await;
                             }
                         }
@@ -618,9 +732,9 @@ impl P2pNode {
         }
     }
 
-    /// Background heartbeat loop: runs every 5 seconds, sends heartbeats, checks timeouts (15s)
+    /// Background heartbeat loop: runs every 10 seconds, sends heartbeats, checks timeouts (22s)
     async fn run_heartbeat_loop(&self) {
-        let mut interval = tokio::time::interval(Duration::from_secs(5));
+        let mut interval = tokio::time::interval(Duration::from_secs(10));
         loop {
             interval.tick().await;
 
@@ -637,7 +751,8 @@ impl P2pNode {
 
                     for peer in peer_list.iter() {
                         let ls = *peer.last_seen.read().await;
-                        if now.duration_since(ls) > Duration::from_secs(15) {
+                        let is_closed = peer.connection.close_reason().is_some();
+                        if is_closed || now.duration_since(ls) > Duration::from_secs(22) {
                             timed_out_peers.push(peer.peer_id.clone());
                         } else {
                             // Send heartbeat
@@ -647,9 +762,29 @@ impl P2pNode {
                                 timestamp: now_ms,
                             };
                             let conn = peer.connection.clone();
+                            let p_id = peer.peer_id.clone();
+                            let r_id = room_id.clone();
+                            let node_ref = self.clone();
                             crate::get_runtime().spawn(async move {
-                                if let Ok((mut send, _recv)) = conn.open_bi().await {
-                                    let _ = write_packet_and_finish(&mut send, &pkt).await;
+                                match conn.open_bi().await {
+                                    Ok((mut send, mut recv)) => {
+                                        if write_packet_and_finish(&mut send, &pkt).await.is_ok() {
+                                            if let Ok(SyncPacket::PresenceHeartbeatAck { .. }) = read_packet(&mut recv).await {
+                                                // Ack received and touched
+                                            }
+                                        }
+                                    }
+                                    Err(_) => {
+                                        // QUIC connection closed/dead: remove immediately
+                                        let mut peers = node_ref.active_peers.write().await;
+                                        if let Some(list) = peers.get_mut(&r_id) {
+                                            list.retain(|p| p.peer_id != p_id);
+                                        }
+                                        let (total, online) = node_ref.get_peer_counts(&r_id).await;
+                                        let _ = node_ref.legacy_event_sender.send(P2pEvent::peer_disconnected(p_id.clone(), r_id.clone()));
+                                        node_ref.emit_room_event(&r_id, RoomEvent::peer_left(r_id.clone(), p_id)).await;
+                                        node_ref.emit_room_event(&r_id, RoomEvent::active_peer_count(r_id.clone(), total, online)).await;
+                                    }
                                 }
                             });
                         }
@@ -680,6 +815,55 @@ impl P2pNode {
         }
     }
 
+    pub async fn disconnect_all_peers(&self) {
+        let local_id = self.node_id().to_string();
+        let mut peers_map = self.active_peers.write().await;
+        for (room_id, peer_list) in peers_map.iter_mut() {
+            for peer in peer_list.drain(..) {
+                let pkt = SyncPacket::PeerDisconnecting {
+                    room_id: room_id.clone(),
+                    peer_id: local_id.clone(),
+                };
+                let conn = peer.connection.clone();
+                crate::get_runtime().spawn(async move {
+                    if let Ok((mut send, _recv)) = conn.open_bi().await {
+                        let _ = write_packet_and_finish(&mut send, &pkt).await;
+                    }
+                    conn.close(0u32.into(), b"App pausing or closing");
+                });
+            }
+            let (total, online) = (1, 1);
+            let _ = self.emit_room_event(room_id, RoomEvent::active_peer_count(room_id.clone(), total, online)).await;
+        }
+    }
+
+    pub async fn boot_p2p_network(&self) -> Result<()> {
+        if let Ok(profile) = crate::api::notes::get_user_profile() {
+            self.set_display_name(profile.display_name.clone()).await;
+        }
+
+        if let Ok(shared_rooms) = crate::api::notes::get_shared_rooms_with_keys() {
+            for r in shared_rooms {
+                if let Ok(key_bytes_vec) = BASE64.decode(&r.encryption_key) {
+                    if key_bytes_vec.len() == 32 {
+                        let mut k = [0u8; 32];
+                        k.copy_from_slice(&key_bytes_vec);
+                        self.register_shared_room(r.room_id.clone(), k).await;
+                    }
+                }
+                if let Some(ticket_str) = r.share_ticket {
+                    if !ticket_str.trim().is_empty() {
+                        let node_clone = self.clone();
+                        crate::get_runtime().spawn(async move {
+                            let _ = node_clone.import_room_ticket(ticket_str).await;
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub async fn register_shared_room(&self, room_id: String, key_bytes: [u8; 32]) {
         let mut rooms = self.shared_rooms.write().await;
         rooms.insert(room_id, key_bytes);
@@ -705,20 +889,26 @@ impl P2pNode {
         let node_addr: NodeAddr = self.endpoint.node_addr().await.context("Failed to get local NodeAddr")?;
 
         let ticket = RoomShareTicket {
-            room_id,
+            room_id: room_id.clone(),
             room_name,
             encryption_key: BASE64.encode(key_bytes),
             node_addr,
         };
 
-        // Compress: JSON → Zlib → URL-safe Base64 (produces ~40% shorter tickets = denser QR)
-        let json = serde_json::to_vec(&ticket)?;
-        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
-        use std::io::Write;
-        encoder.write_all(&json).context("Zlib encode failed")?;
-        let compressed = encoder.finish().context("Zlib finish failed")?;
-        let base64_ticket = BASE64_URL.encode(&compressed);
-        Ok(format!("notetosms://join?ticket={}", base64_ticket))
+        // Compact 66-byte binary payload (Version 0x01 + 32B NodeId + 32B RoomKey + 1B RelayIndex)
+        // Encoded via Base58 (~89-91 chars) for compact, SMS-friendly, fast-scanning QR codes
+        let compact_66 = ticket.to_compact_66_bytes()?;
+        let encoded_token = bs58::encode(&compact_66).into_string();
+        let ticket_url = format!("notetosms://join?ticket={}", encoded_token);
+
+        // Persist room encryption key & ticket in encrypted SQLite storage
+        let _ = crate::api::notes::save_room_encryption_details(
+            room_id,
+            BASE64.encode(key_bytes),
+            Some(ticket_url.clone()),
+        );
+
+        Ok(ticket_url)
     }
 
     /// Alias for backward compatibility
@@ -731,54 +921,11 @@ impl P2pNode {
         let cleaned = ticket_data
             .trim()
             .trim_start_matches("notetosms://join?ticket=")
-            .trim_start_matches("notetosms://invite?data=");
+            .trim_start_matches("notetosms://invite?data=")
+            .trim_start_matches("chatnotes://join?ticket=")
+            .trim_start_matches("chatnotes://invite?data=");
 
-        // Try compressed format (URL-safe Base64 → Zlib → JSON) first, then fall back to legacy plain Base64-JSON
-        let json_bytes: Vec<u8> = if let Ok(compressed) = BASE64_URL.decode(cleaned) {
-            use std::io::Read;
-            let mut decoder = flate2::read::ZlibDecoder::new(compressed.as_slice());
-            let mut buf = Vec::new();
-            if decoder.read_to_end(&mut buf).is_ok() && !buf.is_empty() {
-                buf
-            } else if let Ok(plain) = BASE64.decode(cleaned) {
-                plain
-            } else {
-                return Err(anyhow!("Invalid compressed or base64 ticket string"));
-            }
-        } else if let Ok(plain) = BASE64.decode(cleaned) {
-            plain
-        } else {
-            return Err(anyhow!("Invalid base64 ticket string"));
-        };
-
-        // Attempt deserializing as new RoomShareTicket, fallback to RoomInvitePayload
-        let ticket: RoomShareTicket = if let Ok(t) = serde_json::from_slice::<RoomShareTicket>(&json_bytes) {
-            t
-        } else if let Ok(legacy) = serde_json::from_slice::<RoomInvitePayload>(&json_bytes) {
-            let host_node_id: NodeId = legacy.host_node_id.parse().context("Invalid host NodeId in legacy invite")?;
-            let mut node_addr = NodeAddr::new(host_node_id);
-
-            if let Some(ref relay_str) = legacy.relay_url {
-                if let Ok(relay_url) = relay_str.parse() {
-                    node_addr = node_addr.with_relay_url(relay_url);
-                }
-            }
-
-            for addr_str in &legacy.direct_addrs {
-                if let Ok(sock_addr) = addr_str.parse() {
-                    node_addr = node_addr.with_direct_addresses(vec![sock_addr]);
-                }
-            }
-
-            RoomShareTicket {
-                room_id: legacy.room_id,
-                room_name: legacy.room_name,
-                encryption_key: legacy.shared_key_b64,
-                node_addr,
-            }
-        } else {
-            return Err(anyhow!("Unsupported ticket payload format"));
-        };
+        let mut ticket = decode_ticket_payload(cleaned)?;
 
         let key_bytes_vec = BASE64.decode(&ticket.encryption_key).context("Invalid base64 room encryption key")?;
         if key_bytes_vec.len() != 32 {
@@ -787,15 +934,11 @@ impl P2pNode {
         let mut key_bytes = [0u8; 32];
         key_bytes.copy_from_slice(&key_bytes_vec);
 
-        // Register room key in memory
-        self.register_shared_room(ticket.room_id.clone(), key_bytes).await;
-
-        // Dial Device A directly using Iroh endpoint
-        let connection: Connection = self
+        // Dial host directly using Iroh endpoint
+        let connection = self
             .endpoint
             .connect(ticket.node_addr.clone(), P2P_ALPN)
-            .await
-            .context("Failed to connect to peer endpoint via Iroh")?;
+            .await?;
 
         let (mut send, mut recv) = connection.open_bi().await.context("Failed to open handshake bi-stream")?;
 
@@ -806,25 +949,46 @@ impl P2pNode {
                 peer_node_id: self.node_id().to_string(),
                 room_id: ticket.room_id.clone(),
                 display_name: my_display_name.clone(),
+                key_fingerprint: Some(hex_prefix(&key_bytes[0..8])),
             },
         )
         .await?;
 
         let ack = read_packet(&mut recv).await?;
-        let host_display_name = match ack {
+        let (host_display_name, matched_room_id, matched_room_name) = match ack {
             SyncPacket::HandshakeAck {
                 accepted,
                 status,
                 display_name: host_dn,
+                room_id: ack_r_id,
+                room_name: ack_r_name,
                 ..
             } => {
                 if !accepted {
                     return Err(anyhow!("Handshake rejected by host: {}", status));
                 }
-                host_dn
+                (
+                    host_dn,
+                    ack_r_id.unwrap_or_else(|| ticket.room_id.clone()),
+                    ack_r_name.unwrap_or_else(|| ticket.room_name.clone()),
+                )
             }
             _ => return Err(anyhow!("Unexpected response during handshake")),
         };
+
+        ticket.room_id = matched_room_id.clone();
+        ticket.room_name = matched_room_name.clone();
+
+        // Register room key in memory under final resolved room ID
+        self.register_shared_room(ticket.room_id.clone(), key_bytes).await;
+
+        // Persist room and key in local SQLite database
+        let _ = crate::api::notes::upsert_room(&ticket.room_id, &ticket.room_name, "chat_bubble", 0xFF1A73E8);
+        let _ = crate::api::notes::save_room_encryption_details(
+            ticket.room_id.clone(),
+            ticket.encryption_key.clone(),
+            Some(format!("notetosms://join?ticket={}", cleaned)),
+        );
 
         let host_peer_id = ticket.node_addr.node_id.to_string();
         let active_peer = ActivePeer {
@@ -836,7 +1000,9 @@ impl P2pNode {
 
         {
             let mut peers = self.active_peers.write().await;
-            peers.entry(ticket.room_id.clone()).or_default().push(active_peer);
+            let list = peers.entry(ticket.room_id.clone()).or_default();
+            list.retain(|p| p.peer_id != host_peer_id && p.connection.stable_id() != connection.stable_id());
+            list.push(active_peer);
         }
 
         let is_new = {
@@ -899,6 +1065,9 @@ impl P2pNode {
                     if let Ok(SyncPacket::HistoryResponse { room_id, notes }) = read_packet(&mut recv).await {
                         if let Some(kb) = node_ref.get_room_key(&room_id).await {
                             for note in notes {
+                                let note_author_id = note.author_id.as_deref().or(Some(&host_id_for_history));
+                                let note_author_name = note.author_name.as_deref().or(Some(&host_dn_for_history));
+
                                 if let Ok(plaintext) = decrypt_shared_content(&note.ciphertext, &note.nonce, &kb) {
                                     if let Ok(saved) = crate::api::notes::upsert_synced_note(
                                         &note.id,
@@ -908,12 +1077,14 @@ impl P2pNode {
                                         note.is_todo,
                                         note.is_completed,
                                         note.is_pinned,
+                                        note_author_id,
+                                        note_author_name,
                                     ) {
                                         node_ref.emit_room_event(&room_id, RoomEvent::note_received(
                                             room_id.clone(),
                                             saved,
                                             Some(host_id_for_history.clone()),
-                                            Some(host_dn_for_history.clone()),
+                                            note_author_name.map(|s| s.to_string()),
                                         )).await;
                                     }
                                 }
@@ -977,6 +1148,7 @@ impl P2pNode {
         }
 
         let (ciphertext, nonce) = encrypt_shared_content(note.content.as_bytes(), &key_bytes)?;
+        let my_display_name = self.get_display_name().await;
 
         let packet = SyncPacket::BroadcastNote {
             room_id: room_id.to_string(),
@@ -991,6 +1163,7 @@ impl P2pNode {
                 is_pinned: note.is_pinned,
                 tags: note.tags.clone(),
                 author_id: Some(self.node_id().to_string()),
+                author_name: Some(my_display_name),
             },
         };
 
@@ -1127,13 +1300,17 @@ mod tests {
 
         assert!(ticket_uri.starts_with("notetosms://join?ticket="));
 
-        let payload_base64 = ticket_uri.trim_start_matches("notetosms://join?ticket=");
-        let json_bytes = BASE64.decode(payload_base64).unwrap();
-        let ticket: RoomShareTicket = serde_json::from_slice(&json_bytes).unwrap();
+        let payload_token = ticket_uri.trim_start_matches("notetosms://join?ticket=");
+        // Assert token is compact (under 92 characters!)
+        assert!(payload_token.len() <= 92, "Ticket token length is {} (expected <= 92)", payload_token.len());
 
-        assert_eq!(ticket.room_id, "project-x");
-        assert_eq!(ticket.room_name, "Project X");
-        assert!(!ticket.encryption_key.is_empty());
-        assert_eq!(ticket.node_addr.node_id, node.node_id());
+        let decoded_ticket = decode_ticket_payload(payload_token).unwrap();
+        assert!(!decoded_ticket.encryption_key.is_empty());
+        assert_eq!(decoded_ticket.node_addr.node_id, node.node_id());
+
+        // Verify direct 66-byte decode
+        let raw_bytes = bs58::decode(payload_token).into_vec().unwrap();
+        assert_eq!(raw_bytes.len(), 66);
+        assert_eq!(raw_bytes[0], TICKET_VERSION_COMPACT);
     }
 }

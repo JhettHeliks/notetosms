@@ -9,35 +9,46 @@ import '../p2p_protocol.dart';
 import '../storage.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `with_store`
+// These functions are ignored because they are not marked as `pub`: `get_notes_for_history`, `upsert_room`, `upsert_synced_note`, `with_store`
 
-/// Helper called by P2P sync engine to query notes for history sync
-Future<List<NoteItem>> getNotesForHistory({
-  required String roomId,
-  required PlatformInt64 sinceTimestamp,
-}) => RustLib.instance.api.crateApiNotesGetNotesForHistory(
-  roomId: roomId,
-  sinceTimestamp: sinceTimestamp,
+/// Get user profile
+Future<UserProfile> getUserProfile() =>
+    RustLib.instance.api.crateApiNotesGetUserProfile();
+
+/// Save user profile
+Future<void> saveUserProfile({
+  required String displayName,
+  required int avatarColor,
+  required String avatarIcon,
+}) => RustLib.instance.api.crateApiNotesSaveUserProfile(
+  displayName: displayName,
+  avatarColor: avatarColor,
+  avatarIcon: avatarIcon,
 );
 
-/// Helper called by P2P sync engine to upsert received notes into local encrypted SQLite store
-Future<NoteItem> upsertSyncedNote({
-  required String id,
+/// Set per-thread background P2P sync toggle
+Future<void> setRoomBackgroundSync({
   required String roomId,
-  required String content,
-  required PlatformInt64 timestampMs,
-  required bool isTodo,
-  required bool isCompleted,
-  required bool isPinned,
-}) => RustLib.instance.api.crateApiNotesUpsertSyncedNote(
-  id: id,
+  required bool enabled,
+}) => RustLib.instance.api.crateApiNotesSetRoomBackgroundSync(
   roomId: roomId,
-  content: content,
-  timestampMs: timestampMs,
-  isTodo: isTodo,
-  isCompleted: isCompleted,
-  isPinned: isPinned,
+  enabled: enabled,
 );
+
+/// Save room encryption details and share ticket in vault
+Future<void> saveRoomEncryptionDetails({
+  required String roomId,
+  required String encryptionKey,
+  String? shareTicket,
+}) => RustLib.instance.api.crateApiNotesSaveRoomEncryptionDetails(
+  roomId: roomId,
+  encryptionKey: encryptionKey,
+  shareTicket: shareTicket,
+);
+
+/// Query shared rooms with encryption keys for auto-restore
+Future<List<SharedRoomInfo>> getSharedRoomsWithKeys() =>
+    RustLib.instance.api.crateApiNotesGetSharedRoomsWithKeys();
 
 /// Initialize or unlock vault at a specified custom database file path.
 Future<VaultStatus> initVaultAtPath({
@@ -234,3 +245,15 @@ Stream<RoomEvent> subscribeRoomEvents({required String roomId}) =>
 /// Subscribe to legacy P2P network events
 Stream<P2pEvent> subscribeP2PEvents() =>
     RustLib.instance.api.crateApiNotesSubscribeP2PEvents();
+
+/// Get the local P2P NodeId
+Future<String> getLocalNodeId() =>
+    RustLib.instance.api.crateApiNotesGetLocalNodeId();
+
+/// Automatically re-hydrate P2P network, re-register all shared room keys, and dial active threads
+Future<void> bootP2PNetwork() =>
+    RustLib.instance.api.crateApiNotesBootP2PNetwork();
+
+/// Gracefully signal disconnect to all connected peers and close active connections
+Future<void> disconnectAllPeers() =>
+    RustLib.instance.api.crateApiNotesDisconnectAllPeers();

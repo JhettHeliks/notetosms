@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:notetosms/core/theme/app_theme.dart';
 import 'package:notetosms/core/theme/theme_provider.dart';
+import 'package:notetosms/services/vault_service.dart';
 import 'package:notetosms/src/rust/frb_generated.dart';
 import 'package:notetosms/ui/screens/auth_gate.dart';
 import 'package:notetosms/ui/views/bubble_chat_view.dart';
@@ -18,8 +19,34 @@ Future<void> main() async {
   );
 }
 
-class NoteToSmsApp extends StatelessWidget {
+class NoteToSmsApp extends StatefulWidget {
   const NoteToSmsApp({super.key});
+
+  @override
+  State<NoteToSmsApp> createState() => _NoteToSmsAppState();
+}
+
+class _NoteToSmsAppState extends State<NoteToSmsApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      VaultService.instance.bootP2pNetwork();
+    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+      VaultService.instance.disconnectAllPeers();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:notetosms/core/theme/app_theme.dart';
 import 'package:notetosms/src/rust/storage.dart';
 import 'package:notetosms/ui/widgets/note_bubble.dart';
 
@@ -8,9 +9,9 @@ import 'package:notetosms/ui/widgets/note_bubble.dart';
 /// - Desktop (Windows/macOS/Linux): Directly renders [NoteBubble] with cursor-anchored
 ///   right-click context menus. Swiping is disabled.
 /// - Mobile (Android/iOS): Interactive spring-physics swipe:
-///   * Swipe Left: Reveals inline action buttons (Copy, Edit, Delete) and stays open
-///     until an action is chosen or the user taps to dismiss.
-///   * Swipe Right: Quick-pin / unpin toggle with haptic feedback tick.
+///   * Swipe Left: Reveals consolidated inline action buttons (Pin/Unpin, Copy, Edit, Delete)
+///     and stays open until an action is chosen or the user taps anywhere to dismiss.
+///   * Swipe Right: Disabled to avoid accidental pinning while scrolling.
 ///   * Zero long-press bottom sheets across all platforms.
 class SwipeableNoteBubble extends StatefulWidget {
   final NoteItem note;
@@ -47,8 +48,7 @@ class _SwipeableNoteBubbleState extends State<SwipeableNoteBubble>
   late final AnimationController _animController;
   late Animation<double> _offsetAnimation;
   double _dragOffset = 0.0;
-  static const double _actionPanelWidth = 138.0;
-  static const double _maxRightSwipe = 75.0;
+  static const double _actionPanelWidth = 184.0;
   bool _isOpen = false;
   bool _hapticFired = false;
 
@@ -118,19 +118,17 @@ class _SwipeableNoteBubbleState extends State<SwipeableNoteBubble>
   void _handleHorizontalDragUpdate(DragUpdateDetails details) {
     final delta = details.primaryDelta ?? 0.0;
     setState(() {
+      // Allow swiping left; clamp right drag to slight resistance (max 10.0) that snaps back
       _dragOffset = (_dragOffset + delta).clamp(
-        -_actionPanelWidth - 25.0,
-        _maxRightSwipe,
+        -_actionPanelWidth - 20.0,
+        10.0,
       );
     });
 
-    if ((_dragOffset <= -_actionPanelWidth * 0.4 || _dragOffset >= 50.0) &&
-        !_hapticFired) {
+    if (_dragOffset <= -_actionPanelWidth * 0.4 && !_hapticFired) {
       HapticFeedback.selectionClick();
       _hapticFired = true;
-    } else if (_dragOffset > -_actionPanelWidth * 0.4 &&
-        _dragOffset < 50.0 &&
-        _hapticFired) {
+    } else if (_dragOffset > -_actionPanelWidth * 0.4 && _hapticFired) {
       _hapticFired = false;
     }
   }
@@ -139,16 +137,11 @@ class _SwipeableNoteBubbleState extends State<SwipeableNoteBubble>
     final velocity = details.primaryVelocity ?? 0.0;
 
     if (_dragOffset < -45.0 || velocity < -350) {
-      // Swipe Left: Snap open to reveal action panel and stay open
+      // Swipe Left: Snap open to reveal consolidated action panel and stay open
       HapticFeedback.lightImpact();
       _openActions();
-    } else if (_dragOffset > 50.0 || velocity > 350) {
-      // Swipe Right: Quick Toggle Pin and snap back
-      HapticFeedback.mediumImpact();
-      widget.onTogglePin?.call(!widget.note.isPinned);
-      _animateTo(0.0);
     } else {
-      // Released without reaching threshold: snap back closed
+      // Released without reaching threshold or dragged right: snap back closed
       _animateTo(0.0);
     }
   }
@@ -195,61 +188,8 @@ class _SwipeableNoteBubbleState extends State<SwipeableNoteBubble>
         child: Stack(
           alignment: Alignment.center,
           children: [
-            // Background Action Layer (Visible during drag or when open)
-            if (_dragOffset > 0)
-              // Swipe Right (Pin Indicator) bounded behind the bubble
-              Positioned.fill(
-                child: Align(
-                  alignment: widget.isLocalUser
-                      ? Alignment.centerRight
-                      : Alignment.centerLeft,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minWidth: 90.0,
-                      maxWidth: maxBubbleWidth,
-                    ),
-                    child: Container(
-                      alignment: Alignment.centerLeft,
-                      padding: const EdgeInsets.only(left: 18),
-                      decoration: BoxDecoration(
-                        color: widget.note.isPinned
-                            ? colorScheme.secondaryContainer
-                                .withValues(alpha: 0.85)
-                            : colorScheme.primaryContainer
-                                .withValues(alpha: 0.85),
-                        borderRadius: BorderRadius.circular(22),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            widget.note.isPinned
-                                ? Icons.push_pin_outlined
-                                : Icons.push_pin_rounded,
-                            color: widget.note.isPinned
-                                ? colorScheme.onSecondaryContainer
-                                : colorScheme.onPrimaryContainer,
-                            size: 22,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            widget.note.isPinned ? 'Unpin' : 'Pin',
-                            style: TextStyle(
-                              fontSize: 12.5,
-                              fontWeight: FontWeight.w600,
-                              color: widget.note.isPinned
-                                  ? colorScheme.onSecondaryContainer
-                                  : colorScheme.onPrimaryContainer,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              )
-            else if (_dragOffset < 0)
-              // Swipe Left (Copy, Edit, Delete Actions) bounded behind the bubble
+            // Background Action Layer (Reveals consolidated actions on swipe left)
+            if (_dragOffset < 0 || _isOpen)
               Positioned.fill(
                 child: Align(
                   alignment: widget.isLocalUser
@@ -262,7 +202,7 @@ class _SwipeableNoteBubbleState extends State<SwipeableNoteBubble>
                     ),
                     child: Container(
                       alignment: Alignment.centerRight,
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
                       decoration: BoxDecoration(
                         color: colorScheme.surfaceContainerHighest
                             .withValues(alpha: 0.95),
@@ -271,7 +211,22 @@ class _SwipeableNoteBubbleState extends State<SwipeableNoteBubble>
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          // Copy Action Button
+                          // 1. Pin / Unpin Action Button
+                          _ActionButton(
+                            icon: widget.note.isPinned
+                                ? Icons.push_pin_outlined
+                                : Icons.push_pin_rounded,
+                            color: AppTheme.accentAmber,
+                            tooltip: widget.note.isPinned ? 'Unpin' : 'Pin',
+                            onTap: () {
+                              _close();
+                              HapticFeedback.selectionClick();
+                              widget.onTogglePin?.call(!widget.note.isPinned);
+                            },
+                          ),
+                          const SizedBox(width: 4),
+
+                          // 2. Copy Action Button
                           _ActionButton(
                             icon: Icons.content_copy_rounded,
                             color: colorScheme.onSurfaceVariant,
@@ -288,8 +243,9 @@ class _SwipeableNoteBubbleState extends State<SwipeableNoteBubble>
                               );
                             },
                           ),
-                          const SizedBox(width: 6),
-                          // Edit Action Button
+                          const SizedBox(width: 4),
+
+                          // 3. Edit Action Button
                           _ActionButton(
                             icon: Icons.edit_outlined,
                             color: colorScheme.primary,
@@ -299,8 +255,9 @@ class _SwipeableNoteBubbleState extends State<SwipeableNoteBubble>
                               _showEditDialog(context);
                             },
                           ),
-                          const SizedBox(width: 6),
-                          // Delete Action Button
+                          const SizedBox(width: 4),
+
+                          // 4. Delete Action Button
                           _ActionButton(
                             icon: Icons.delete_outline_rounded,
                             color: colorScheme.error,

@@ -7,8 +7,10 @@ import 'package:notetosms/src/rust/p2p.dart';
 import 'package:notetosms/src/rust/p2p_protocol.dart';
 import 'package:notetosms/src/rust/storage.dart';
 import 'package:notetosms/ui/dialogs/backup_restore_dialog.dart';
+import 'package:notetosms/ui/dialogs/profile_dialog.dart';
 import 'package:notetosms/ui/dialogs/room_dialogs.dart';
 import 'package:notetosms/ui/dialogs/settings_dialog.dart';
+import 'package:notetosms/ui/dialogs/thread_settings_dialog.dart';
 import 'package:notetosms/ui/dialogs/version_history_dialog.dart';
 import 'package:notetosms/ui/views/conversation_list_view.dart';
 import 'package:notetosms/ui/widgets/date_header.dart';
@@ -43,6 +45,7 @@ class _ChatScreenState extends State<ChatScreen> {
   List<RoomItem> _rooms = [];
   String _currentRoomId = 'general';
   List<NoteItem> _notes = [];
+  String? _localNodeId;
 
   bool _isLoading = true;
   bool _isSearching = false;
@@ -99,6 +102,13 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _initP2p() async {
     try {
       await VaultService.instance.startP2PNode();
+      try {
+        final nodeId = await VaultService.instance.getLocalNodeId();
+        if (mounted) {
+          setState(() => _localNodeId = nodeId);
+        }
+      } catch (_) {}
+
       _p2pSubscription = VaultService.instance.subscribeP2PEvents().listen((event) {
         if (event is P2pEvent) {
           _handleLegacyP2pEvent(event);
@@ -147,6 +157,8 @@ class _ChatScreenState extends State<ChatScreen> {
           _showSnackBar('$displayName joined #${_currentRoom?.name ?? _currentRoomId}');
         }
       } else if (event.eventType == 'peer_left') {
+        final peerKey = event.peerId ?? event.displayName ?? 'peer';
+        _announcedPeerIds.remove(peerKey);
         setState(() {
           _activeOnline = event.activeOnline > 0 ? event.activeOnline : (_activeOnline > 1 ? _activeOnline - 1 : 1);
         });
@@ -576,7 +588,17 @@ class _ChatScreenState extends State<ChatScreen> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
             color: colorScheme.surfaceContainerHigh,
             onSelected: (value) {
-              if (value == 'share') {
+              if (value == 'thread_settings') {
+                if (currentRoom != null) {
+                  ThreadSettingsDialog.show(
+                    context,
+                    room: currentRoom,
+                    onRoomUpdated: _loadInitialData,
+                  );
+                }
+              } else if (value == 'profile') {
+                ProfileDialog.show(context);
+              } else if (value == 'share') {
                 if (currentRoom != null) {
                   _openShareSheet();
                 }
@@ -637,6 +659,27 @@ class _ChatScreenState extends State<ChatScreen> {
               }
             },
             itemBuilder: (context) => [
+              if (currentRoom != null)
+                const PopupMenuItem(
+                  value: 'thread_settings',
+                  child: Row(
+                    children: [
+                      Icon(Icons.tune_rounded, size: 20, color: AppTheme.secondary),
+                      SizedBox(width: 10),
+                      Text('Thread Settings & Sync'),
+                    ],
+                  ),
+                ),
+              const PopupMenuItem(
+                value: 'profile',
+                child: Row(
+                  children: [
+                    Icon(Icons.account_circle_outlined, size: 20, color: AppTheme.tertiary),
+                    SizedBox(width: 10),
+                    Text('User Profile & Handle'),
+                  ],
+                ),
+              ),
               const PopupMenuItem(
                 value: 'bubble',
                 child: Row(
@@ -890,8 +933,9 @@ class _ChatScreenState extends State<ChatScreen> {
           }
         }
 
-        final isLocal = !_remoteNoteAuthors.containsKey(note.id);
-        final senderName = _remoteNoteAuthors[note.id];
+        final isLocal = (note.authorId == null || note.authorId == _localNodeId) &&
+            !_remoteNoteAuthors.containsKey(note.id);
+        final senderName = isLocal ? null : (note.authorName ?? _remoteNoteAuthors[note.id] ?? 'Peer');
 
         bool isPreviousInCluster = false;
         bool isNextInCluster = false;
@@ -899,12 +943,13 @@ class _ChatScreenState extends State<ChatScreen> {
         // Compare with previous note for consecutive author grouping
         if (index > 0) {
           final prevNote = _notes[index - 1];
-          final prevIsLocal = !_remoteNoteAuthors.containsKey(prevNote.id);
-          final prevSenderName = _remoteNoteAuthors[prevNote.id];
+          final prevIsLocal = (prevNote.authorId == null || prevNote.authorId == _localNodeId) &&
+              !_remoteNoteAuthors.containsKey(prevNote.id);
+          final prevSenderName = prevIsLocal ? null : (prevNote.authorName ?? _remoteNoteAuthors[prevNote.id] ?? 'Peer');
           final diff = (note.timestampMs.toInt() - prevNote.timestampMs.toInt()).abs();
           final isSameAuthor = isLocal
               ? prevIsLocal
-              : (!prevIsLocal && (prevSenderName == senderName || prevNote.roomId == note.roomId));
+              : (!prevIsLocal && (prevSenderName == senderName || (prevNote.authorId != null && prevNote.authorId == note.authorId)));
           if (isSameAuthor && diff <= 120000 && !showDateHeader) {
             isPreviousInCluster = true;
           }
@@ -913,8 +958,9 @@ class _ChatScreenState extends State<ChatScreen> {
         // Compare with next note for consecutive author grouping
         if (index < _notes.length - 1) {
           final nextNote = _notes[index + 1];
-          final nextIsLocal = !_remoteNoteAuthors.containsKey(nextNote.id);
-          final nextSenderName = _remoteNoteAuthors[nextNote.id];
+          final nextIsLocal = (nextNote.authorId == null || nextNote.authorId == _localNodeId) &&
+              !_remoteNoteAuthors.containsKey(nextNote.id);
+          final nextSenderName = nextIsLocal ? null : (nextNote.authorName ?? _remoteNoteAuthors[nextNote.id] ?? 'Peer');
           final nextDate = DateTime.fromMillisecondsSinceEpoch(nextNote.timestampMs.toInt());
           final isSameDay = noteDate.year == nextDate.year &&
               noteDate.month == nextDate.month &&
@@ -922,7 +968,7 @@ class _ChatScreenState extends State<ChatScreen> {
           final diff = (nextNote.timestampMs.toInt() - note.timestampMs.toInt()).abs();
           final isSameAuthor = isLocal
               ? nextIsLocal
-              : (!nextIsLocal && (nextSenderName == senderName || nextNote.roomId == note.roomId));
+              : (!nextIsLocal && (nextSenderName == senderName || (nextNote.authorId != null && nextNote.authorId == note.authorId)));
           if (isSameAuthor && diff <= 120000 && isSameDay) {
             isNextInCluster = true;
           }

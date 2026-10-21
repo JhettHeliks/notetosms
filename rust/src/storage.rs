@@ -15,6 +15,21 @@ const VERIFY_MAGIC_PLAINTEXT: &[u8] = b"CHATNOTES_ENCRYPTED_VAULT_V1_OK";
 const CURRENT_SCHEMA_VERSION: i32 = 1;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UserProfile {
+    pub display_name: String,
+    pub avatar_color: u32,
+    pub avatar_icon: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SharedRoomInfo {
+    pub room_id: String,
+    pub encryption_key: String,
+    pub is_background_sync_enabled: bool,
+    pub share_ticket: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NoteItem {
     pub id: String,
     pub room_id: String,
@@ -24,6 +39,8 @@ pub struct NoteItem {
     pub is_completed: bool,
     pub is_pinned: bool,
     pub tags: Vec<String>,
+    pub author_id: Option<String>,
+    pub author_name: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -34,6 +51,9 @@ pub struct RoomItem {
     pub color: u32,
     pub created_at: i64,
     pub sort_order: i32,
+    pub encryption_key: Option<String>,
+    pub share_ticket: Option<String>,
+    pub is_background_sync_enabled: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -64,6 +84,8 @@ pub struct UnencryptedBackupNote {
     pub is_completed: bool,
     pub is_pinned: bool,
     pub tags: Vec<String>,
+    pub author_id: Option<String>,
+    pub author_name: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -163,7 +185,10 @@ impl EncryptedStore {
                 icon TEXT NOT NULL DEFAULT 'chat_bubble',
                 color INTEGER NOT NULL DEFAULT 4284704511,
                 created_at INTEGER NOT NULL,
-                sort_order INTEGER NOT NULL DEFAULT 0
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                encryption_key TEXT,
+                share_ticket TEXT,
+                is_background_sync_enabled INTEGER NOT NULL DEFAULT 1
             );
 
             CREATE TABLE IF NOT EXISTS notes (
@@ -176,13 +201,31 @@ impl EncryptedStore {
                 is_completed INTEGER NOT NULL DEFAULT 0,
                 is_pinned INTEGER NOT NULL DEFAULT 0,
                 tags TEXT NOT NULL DEFAULT '',
+                author_id TEXT,
+                author_name TEXT,
                 FOREIGN KEY (room_id) REFERENCES rooms(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS user_profile (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                display_name TEXT NOT NULL DEFAULT 'NoteToSMS User',
+                avatar_color INTEGER NOT NULL DEFAULT 4280424424,
+                avatar_icon TEXT NOT NULL DEFAULT 'person',
+                updated_at INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE INDEX IF NOT EXISTS idx_notes_room_timestamp ON notes(room_id, timestamp_ms);
             CREATE INDEX IF NOT EXISTS idx_notes_pinned ON notes(is_pinned);
             "#,
         )?;
+
+        // Auto-migrate tables in case database was created under previous schema
+        let _ = self.conn.execute("ALTER TABLE notes ADD COLUMN author_id TEXT", []);
+        let _ = self.conn.execute("ALTER TABLE notes ADD COLUMN author_name TEXT", []);
+        let _ = self.conn.execute("ALTER TABLE rooms ADD COLUMN encryption_key TEXT", []);
+        let _ = self.conn.execute("ALTER TABLE rooms ADD COLUMN share_ticket TEXT", []);
+        let _ = self.conn.execute("ALTER TABLE rooms ADD COLUMN is_background_sync_enabled INTEGER NOT NULL DEFAULT 1", []);
+
         Ok(())
     }
 
@@ -422,6 +465,43 @@ impl EncryptedStore {
 
     // --- Note CRUD Operations ---
 
+    pub fn get_user_profile(&self) -> Result<UserProfile> {
+        let res = self.conn.query_row(
+            "SELECT display_name, avatar_color, avatar_icon FROM user_profile WHERE id = 1",
+            [],
+            |r| {
+                Ok(UserProfile {
+                    display_name: r.get(0)?,
+                    avatar_color: r.get::<_, i64>(1)? as u32,
+                    avatar_icon: r.get(2)?,
+                })
+            },
+        ).optional()?;
+
+        Ok(res.unwrap_or(UserProfile {
+            display_name: "NoteToSMS User".to_string(),
+            avatar_color: 0xFF1A73E8,
+            avatar_icon: "person".to_string(),
+        }))
+    }
+
+    pub fn save_user_profile(&mut self, profile: &UserProfile) -> Result<()> {
+        let now = current_time_ms();
+        self.conn.execute(
+            r#"
+            INSERT INTO user_profile (id, display_name, avatar_color, avatar_icon, updated_at)
+            VALUES (1, ?1, ?2, ?3, ?4)
+            ON CONFLICT(id) DO UPDATE SET
+                display_name = excluded.display_name,
+                avatar_color = excluded.avatar_color,
+                avatar_icon = excluded.avatar_icon,
+                updated_at = excluded.updated_at
+            "#,
+            params![profile.display_name, profile.avatar_color as i64, profile.avatar_icon, now],
+        )?;
+        Ok(())
+    }
+
     pub fn save_note(&mut self, room_id: &str, content: &str) -> Result<NoteItem> {
         let trimmed = content.trim();
         if trimmed.is_empty() {
@@ -436,11 +516,32 @@ impl EncryptedStore {
         let id = format!("note_{}_{}", timestamp_ms, generate_random_id());
 
         let (ciphertext, nonce) = encrypt_payload(key, content.as_bytes())?;
+        let my_profile = self.get_user_profile().unwrap_or(UserProfile {
+            display_name: "You".to_string(),
+            avatar_color: 0xFF1A73E8,
+            avatar_icon: "person".to_string(),
+        });
+
+        // Ensure room exists in rooms table so foreign key constraint never fails
+        let room_exists: bool = self.conn.query_row(
+            "SELECT COUNT(*) FROM rooms WHERE id = ?1",
+            params![room_id],
+            |r| Ok(r.get::<_, i64>(0)? > 0),
+        ).unwrap_or(false);
+
+        if !room_exists {
+            let now = current_time_ms();
+            let _ = self.conn.execute(
+                "INSERT OR IGNORE INTO rooms (id, name, icon, color, created_at, sort_order, is_background_sync_enabled)
+                 VALUES (?1, ?2, 'chat_bubble', 4284704511, ?3, 0, 1)",
+                params![room_id, room_id, now],
+            );
+        }
 
         self.conn.execute(
             r#"
-            INSERT INTO notes (id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8)
+            INSERT INTO notes (id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags, author_id, author_name)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, NULL, ?9)
             "#,
             params![
                 id,
@@ -451,6 +552,7 @@ impl EncryptedStore {
                 if is_todo { 1 } else { 0 },
                 if is_completed { 1 } else { 0 },
                 tags_str,
+                my_profile.display_name,
             ],
         )?;
 
@@ -469,6 +571,8 @@ impl EncryptedStore {
             is_completed,
             is_pinned: false,
             tags,
+            author_id: None,
+            author_name: Some(my_profile.display_name),
         })
     }
 
@@ -485,10 +589,16 @@ impl EncryptedStore {
 
         let (ciphertext, nonce) = encrypt_payload(key, content.as_bytes())?;
 
-        let (room_id, timestamp_ms, is_pinned): (String, i64, i32) = self.conn.query_row(
-            "SELECT room_id, timestamp_ms, is_pinned FROM notes WHERE id = ?1",
+        let (room_id, timestamp_ms, is_pinned, author_id, author_name): (
+            String,
+            i64,
+            i32,
+            Option<String>,
+            Option<String>,
+        ) = self.conn.query_row(
+            "SELECT room_id, timestamp_ms, is_pinned, author_id, author_name FROM notes WHERE id = ?1",
             params![note_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )?;
 
         self.conn.execute(
@@ -523,23 +633,27 @@ impl EncryptedStore {
             is_completed,
             is_pinned: is_pinned > 0,
             tags,
+            author_id,
+            author_name,
         })
     }
 
     pub fn toggle_todo(&mut self, note_id: &str, is_completed: bool) -> Result<NoteItem> {
         let key = self.get_active_key()?;
         
-        let (room_id, cipher, nonce_vec, timestamp_ms, is_pinned, tags_str): (
+        let (room_id, cipher, nonce_vec, timestamp_ms, is_pinned, tags_str, author_id, author_name): (
             String,
             Vec<u8>,
             Vec<u8>,
             i64,
             i32,
             String,
+            Option<String>,
+            Option<String>,
         ) = self.conn.query_row(
-            "SELECT room_id, ciphertext, nonce, timestamp_ms, is_pinned, tags FROM notes WHERE id = ?1",
+            "SELECT room_id, ciphertext, nonce, timestamp_ms, is_pinned, tags, author_id, author_name FROM notes WHERE id = ?1",
             params![note_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?)),
         )?;
 
         if nonce_vec.len() < NONCE_LEN {
@@ -584,13 +698,15 @@ impl EncryptedStore {
             is_completed,
             is_pinned: is_pinned > 0,
             tags,
+            author_id,
+            author_name,
         })
     }
 
     pub fn pin_note(&mut self, note_id: &str, is_pinned: bool) -> Result<NoteItem> {
         let key = self.get_active_key()?;
 
-        let (room_id, cipher, nonce_vec, timestamp_ms, is_todo, is_completed, tags_str): (
+        let (room_id, cipher, nonce_vec, timestamp_ms, is_todo, is_completed, tags_str, author_id, author_name): (
             String,
             Vec<u8>,
             Vec<u8>,
@@ -598,10 +714,12 @@ impl EncryptedStore {
             i32,
             i32,
             String,
+            Option<String>,
+            Option<String>,
         ) = self.conn.query_row(
-            "SELECT room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, tags FROM notes WHERE id = ?1",
+            "SELECT room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, tags, author_id, author_name FROM notes WHERE id = ?1",
             params![note_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)),
         )?;
 
         if nonce_vec.len() < NONCE_LEN {
@@ -634,6 +752,8 @@ impl EncryptedStore {
             is_completed: is_completed > 0,
             is_pinned,
             tags,
+            author_id,
+            author_name,
         })
     }
 
@@ -649,7 +769,7 @@ impl EncryptedStore {
 
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags
+            SELECT id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags, author_id, author_name
             FROM notes
             WHERE room_id = ?1
             ORDER BY is_pinned DESC, timestamp_ms ASC
@@ -667,12 +787,14 @@ impl EncryptedStore {
                 r.get::<_, i32>(6)?,
                 r.get::<_, i32>(7)?,
                 r.get::<_, String>(8)?,
+                r.get::<_, Option<String>>(9)?,
+                r.get::<_, Option<String>>(10)?,
             ))
         })?;
 
         let mut notes = Vec::new();
         for row in rows {
-            let (id, r_id, cipher, nonce_vec, timestamp_ms, is_todo, is_completed, is_pinned, tags_str) = row?;
+            let (id, r_id, cipher, nonce_vec, timestamp_ms, is_todo, is_completed, is_pinned, tags_str, author_id, author_name) = row?;
             if nonce_vec.len() < NONCE_LEN {
                 continue;
             }
@@ -695,6 +817,8 @@ impl EncryptedStore {
                         is_completed: is_completed > 0,
                         is_pinned: is_pinned > 0,
                         tags,
+                        author_id,
+                        author_name,
                     });
                 }
             }
@@ -712,17 +836,35 @@ impl EncryptedStore {
         is_todo: bool,
         is_completed: bool,
         is_pinned: bool,
+        author_id: Option<&str>,
+        author_name: Option<&str>,
     ) -> Result<NoteItem> {
         let key = self.get_active_key()?;
         let tags = extract_tags(content);
         let tags_str = tags.join(",");
 
+        // Ensure room exists in rooms table so foreign key constraint never fails
+        let room_exists: bool = self.conn.query_row(
+            "SELECT COUNT(*) FROM rooms WHERE id = ?1",
+            params![room_id],
+            |r| Ok(r.get::<_, i64>(0)? > 0),
+        ).unwrap_or(false);
+
+        if !room_exists {
+            let now = current_time_ms();
+            let _ = self.conn.execute(
+                "INSERT OR IGNORE INTO rooms (id, name, icon, color, created_at, sort_order, is_background_sync_enabled)
+                 VALUES (?1, ?2, 'chat_bubble', 4284704511, ?3, 0, 1)",
+                params![room_id, room_id, now],
+            );
+        }
+
         let (ciphertext, nonce) = encrypt_payload(key, content.as_bytes())?;
 
         self.conn.execute(
             r#"
-            INSERT INTO notes (id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            INSERT INTO notes (id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags, author_id, author_name)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             ON CONFLICT(id) DO UPDATE SET
                 ciphertext = excluded.ciphertext,
                 nonce = excluded.nonce,
@@ -730,7 +872,9 @@ impl EncryptedStore {
                 is_todo = excluded.is_todo,
                 is_completed = excluded.is_completed,
                 is_pinned = excluded.is_pinned,
-                tags = excluded.tags
+                tags = excluded.tags,
+                author_id = excluded.author_id,
+                author_name = excluded.author_name
             "#,
             params![
                 id,
@@ -742,6 +886,8 @@ impl EncryptedStore {
                 if is_completed { 1 } else { 0 },
                 if is_pinned { 1 } else { 0 },
                 tags_str,
+                author_id,
+                author_name,
             ],
         )?;
 
@@ -761,6 +907,8 @@ impl EncryptedStore {
             is_completed,
             is_pinned,
             tags,
+            author_id: author_id.map(|s| s.to_string()),
+            author_name: author_name.map(|s| s.to_string()),
         })
     }
 
@@ -769,7 +917,7 @@ impl EncryptedStore {
 
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags
+            SELECT id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags, author_id, author_name
             FROM notes
             WHERE room_id = ?1 AND timestamp_ms >= ?2
             ORDER BY is_pinned DESC, timestamp_ms ASC
@@ -787,12 +935,14 @@ impl EncryptedStore {
                 r.get::<_, i32>(6)?,
                 r.get::<_, i32>(7)?,
                 r.get::<_, String>(8)?,
+                r.get::<_, Option<String>>(9)?,
+                r.get::<_, Option<String>>(10)?,
             ))
         })?;
 
         let mut notes = Vec::new();
         for row in rows {
-            let (id, r_id, cipher, nonce_vec, timestamp_ms, is_todo, is_completed, is_pinned, tags_str) = row?;
+            let (id, r_id, cipher, nonce_vec, timestamp_ms, is_todo, is_completed, is_pinned, tags_str, author_id, author_name) = row?;
             if nonce_vec.len() < NONCE_LEN {
                 continue;
             }
@@ -815,6 +965,8 @@ impl EncryptedStore {
                         is_completed: is_completed > 0,
                         is_pinned: is_pinned > 0,
                         tags,
+                        author_id,
+                        author_name,
                     });
                 }
             }
@@ -851,7 +1003,7 @@ impl EncryptedStore {
             for id in matched_ids {
                 let note_res = self.conn.query_row(
                     r#"
-                    SELECT id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags
+                    SELECT id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags, author_id, author_name
                     FROM notes WHERE id = ?1
                     "#,
                     params![id],
@@ -866,11 +1018,13 @@ impl EncryptedStore {
                             r.get::<_, i32>(6)?,
                             r.get::<_, i32>(7)?,
                             r.get::<_, String>(8)?,
+                            r.get::<_, Option<String>>(9)?,
+                            r.get::<_, Option<String>>(10)?,
                         ))
                     },
                 ).optional()?;
 
-                if let Some((nid, rid, cipher, nonce_vec, ts, is_todo, is_completed, is_pinned, tags_str)) = note_res {
+                if let Some((nid, rid, cipher, nonce_vec, ts, is_todo, is_completed, is_pinned, tags_str, author_id, author_name)) = note_res {
                     if let Some(rf) = room_filter {
                         if rid != rf {
                             continue;
@@ -895,6 +1049,8 @@ impl EncryptedStore {
                                     is_completed: is_completed > 0,
                                     is_pinned: is_pinned > 0,
                                     tags,
+                                    author_id,
+                                    author_name,
                                 });
                             }
                         }
@@ -904,7 +1060,7 @@ impl EncryptedStore {
         } else {
             // Fallback: in-memory substring match across notes
             let mut stmt = self.conn.prepare(
-                "SELECT id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags FROM notes ORDER BY timestamp_ms DESC",
+                "SELECT id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags, author_id, author_name FROM notes ORDER BY timestamp_ms DESC",
             )?;
             let rows = stmt.query_map([], |r| {
                 Ok((
@@ -917,12 +1073,14 @@ impl EncryptedStore {
                     r.get::<_, i32>(6)?,
                     r.get::<_, i32>(7)?,
                     r.get::<_, String>(8)?,
+                    r.get::<_, Option<String>>(9)?,
+                    r.get::<_, Option<String>>(10)?,
                 ))
             })?;
 
             let q_lower = trimmed_query.to_lowercase();
             for row in rows {
-                let (nid, rid, cipher, nonce_vec, ts, is_todo, is_completed, is_pinned, tags_str) = row?;
+                let (nid, rid, cipher, nonce_vec, ts, is_todo, is_completed, is_pinned, tags_str, author_id, author_name) = row?;
                 if let Some(rf) = room_filter {
                     if rid != rf {
                         continue;
@@ -948,6 +1106,8 @@ impl EncryptedStore {
                                     is_completed: is_completed > 0,
                                     is_pinned: is_pinned > 0,
                                     tags,
+                                    author_id,
+                                    author_name,
                                 });
                             }
                         }
@@ -964,7 +1124,7 @@ impl EncryptedStore {
     pub fn list_rooms(&self) -> Result<Vec<RoomItem>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, name, icon, color, created_at, sort_order FROM rooms ORDER BY sort_order ASC, name ASC")?;
+            .prepare("SELECT id, name, icon, color, created_at, sort_order, encryption_key, share_ticket, is_background_sync_enabled FROM rooms ORDER BY sort_order ASC, name ASC")?;
 
         let rows = stmt.query_map([], |r| {
             Ok(RoomItem {
@@ -974,6 +1134,9 @@ impl EncryptedStore {
                 color: r.get::<_, i64>(3)? as u32,
                 created_at: r.get(4)?,
                 sort_order: r.get(5)?,
+                encryption_key: r.get(6)?,
+                share_ticket: r.get(7)?,
+                is_background_sync_enabled: r.get::<_, i32>(8).unwrap_or(1) > 0,
             })
         })?;
 
@@ -999,7 +1162,7 @@ impl EncryptedStore {
             .unwrap_or(0);
 
         self.conn.execute(
-            "INSERT INTO rooms (id, name, icon, color, created_at, sort_order) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO rooms (id, name, icon, color, created_at, sort_order, is_background_sync_enabled) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)",
             params![trimmed_id, trimmed_name, icon, color as i64, now, max_sort],
         )?;
 
@@ -1010,6 +1173,9 @@ impl EncryptedStore {
             color,
             created_at: now,
             sort_order: max_sort,
+            encryption_key: None,
+            share_ticket: None,
+            is_background_sync_enabled: true,
         })
     }
 
@@ -1029,8 +1195,8 @@ impl EncryptedStore {
 
         self.conn.execute(
             r#"
-            INSERT INTO rooms (id, name, icon, color, created_at, sort_order)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            INSERT INTO rooms (id, name, icon, color, created_at, sort_order, is_background_sync_enabled)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 icon = CASE WHEN rooms.icon IS NULL OR rooms.icon = '' THEN excluded.icon ELSE rooms.icon END,
@@ -1045,7 +1211,7 @@ impl EncryptedStore {
     pub fn get_room(&self, room_id: &str) -> Result<RoomItem> {
         self.conn
             .query_row(
-                "SELECT id, name, icon, color, created_at, sort_order FROM rooms WHERE id = ?1",
+                "SELECT id, name, icon, color, created_at, sort_order, encryption_key, share_ticket, is_background_sync_enabled FROM rooms WHERE id = ?1",
                 params![room_id],
                 |r| {
                     Ok(RoomItem {
@@ -1055,10 +1221,48 @@ impl EncryptedStore {
                         color: r.get::<_, i64>(3)? as u32,
                         created_at: r.get(4)?,
                         sort_order: r.get(5)?,
+                        encryption_key: r.get(6)?,
+                        share_ticket: r.get(7)?,
+                        is_background_sync_enabled: r.get::<_, i32>(8).unwrap_or(1) > 0,
                     })
                 },
             )
             .map_err(|e| anyhow!("Room '{room_id}' not found: {e}"))
+    }
+
+    pub fn set_room_background_sync(&mut self, room_id: &str, enabled: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE rooms SET is_background_sync_enabled = ?1 WHERE id = ?2",
+            params![if enabled { 1 } else { 0 }, room_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn save_room_encryption_details(&mut self, room_id: &str, encryption_key: &str, share_ticket: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE rooms SET encryption_key = ?1, share_ticket = COALESCE(?2, share_ticket) WHERE id = ?3",
+            params![encryption_key, share_ticket, room_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_shared_rooms_with_keys(&self) -> Result<Vec<SharedRoomInfo>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, encryption_key, is_background_sync_enabled, share_ticket FROM rooms WHERE encryption_key IS NOT NULL AND encryption_key != ''"
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(SharedRoomInfo {
+                room_id: r.get(0)?,
+                encryption_key: r.get(1)?,
+                is_background_sync_enabled: r.get::<_, i32>(2).unwrap_or(1) > 0,
+                share_ticket: r.get(3)?,
+            })
+        })?;
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r?);
+        }
+        Ok(list)
     }
 
     pub fn delete_room(&mut self, room_id: &str) -> Result<()> {
@@ -1093,10 +1297,12 @@ impl EncryptedStore {
         Ok(format!("notetosms://join?data={b64}"))
     }
 
-    /// Parses and validates a room invite payload from a URI, deep link, or raw Base64 string.
+    /// Parses and validates a room invite payload from a URI, deep link, or raw Base64/Base58 string.
     pub fn parse_room_invite_data(invite_data: &str) -> Result<RoomInvite> {
         let trimmed = invite_data.trim();
-        let payload_b64 = if let Some(idx) = trimmed.find("data=") {
+        let payload_str = if let Some(idx) = trimmed.find("ticket=") {
+            &trimmed[idx + 7..]
+        } else if let Some(idx) = trimmed.find("data=") {
             &trimmed[idx + 5..]
         } else if let Some(idx) = trimmed.find("/join/") {
             &trimmed[idx + 6..]
@@ -1104,13 +1310,25 @@ impl EncryptedStore {
             trimmed
         };
 
-        let clean_b64 = payload_b64.split('&').next().unwrap_or(payload_b64);
+        let clean_payload = payload_str.split('&').next().unwrap_or(payload_str);
+
+        if let Ok(ticket) = crate::p2p_protocol::decode_ticket_payload(clean_payload) {
+            return Ok(RoomInvite {
+                version: 1,
+                room_id: ticket.room_id,
+                name: ticket.room_name,
+                icon: "chat_bubble".into(),
+                color: 0xFF1A73E8,
+                room_key_base64: ticket.encryption_key,
+                created_at: 0,
+            });
+        }
 
         let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(clean_b64)
-            .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(clean_b64))
-            .or_else(|_| base64::engine::general_purpose::STANDARD.decode(clean_b64))
-            .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(clean_b64))
+            .decode(clean_payload)
+            .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(clean_payload))
+            .or_else(|_| base64::engine::general_purpose::STANDARD.decode(clean_payload))
+            .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(clean_payload))
             .context("Failed to decode base64 room invite payload")?;
 
         let invite: RoomInvite = serde_json::from_slice(&decoded)
@@ -1164,7 +1382,7 @@ impl EncryptedStore {
 
         let mut unencrypted_notes = Vec::new();
         let mut stmt = self.conn.prepare(
-            "SELECT id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags FROM notes ORDER BY timestamp_ms ASC"
+            "SELECT id, room_id, ciphertext, nonce, timestamp_ms, is_todo, is_completed, is_pinned, tags, author_id, author_name FROM notes ORDER BY timestamp_ms ASC"
         )?;
 
         let rows = stmt.query_map([], |r| {
@@ -1178,11 +1396,13 @@ impl EncryptedStore {
                 r.get::<_, i32>(6)? != 0,
                 r.get::<_, i32>(7)? != 0,
                 r.get::<_, String>(8)?,
+                r.get::<_, Option<String>>(9)?,
+                r.get::<_, Option<String>>(10)?,
             ))
         })?;
 
         for row in rows {
-            let (id, room_id, ciphertext, nonce_vec, timestamp_ms, is_todo, is_completed, is_pinned, tags_str) = row?;
+            let (id, room_id, ciphertext, nonce_vec, timestamp_ms, is_todo, is_completed, is_pinned, tags_str, author_id, author_name) = row?;
             if nonce_vec.len() < NONCE_LEN {
                 continue;
             }
@@ -1208,6 +1428,8 @@ impl EncryptedStore {
                 is_completed,
                 is_pinned,
                 tags,
+                author_id,
+                author_name,
             });
         }
 
@@ -1288,6 +1510,9 @@ impl EncryptedStore {
                         color: r.get::<_, i64>(3)? as u32,
                         created_at: r.get(4)?,
                         sort_order: r.get(5)?,
+                        encryption_key: None,
+                        share_ticket: None,
+                        is_background_sync_enabled: true,
                     })
                 })?;
                 for r in rows {

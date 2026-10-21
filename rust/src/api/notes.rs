@@ -5,7 +5,7 @@ use crate::frb_generated::StreamSink;
 pub use crate::p2p::P2pEvent;
 use crate::p2p::P2pNode;
 pub use crate::p2p_protocol::RoomEvent;
-pub use crate::storage::{NoteItem, RoomInvite, RoomItem, VaultStatus};
+pub use crate::storage::{NoteItem, RoomInvite, RoomItem, SharedRoomInfo, UserProfile, VaultStatus};
 use crate::storage::EncryptedStore;
 
 static GLOBAL_STORE: Mutex<Option<EncryptedStore>> = Mutex::new(None);
@@ -27,12 +27,12 @@ where
 }
 
 /// Helper called by P2P sync engine to query notes for history sync
-pub fn get_notes_for_history(room_id: &str, since_timestamp: i64) -> Result<Vec<NoteItem>> {
+pub(crate) fn get_notes_for_history(room_id: &str, since_timestamp: i64) -> Result<Vec<NoteItem>> {
     with_store(|store| store.get_notes_since(room_id, since_timestamp))
 }
 
 /// Helper called by P2P sync engine to upsert received notes into local encrypted SQLite store
-pub fn upsert_synced_note(
+pub(crate) fn upsert_synced_note(
     id: &str,
     room_id: &str,
     content: &str,
@@ -40,6 +40,8 @@ pub fn upsert_synced_note(
     is_todo: bool,
     is_completed: bool,
     is_pinned: bool,
+    author_id: Option<&str>,
+    author_name: Option<&str>,
 ) -> Result<NoteItem> {
     with_store(|store| {
         store.upsert_remote_note(
@@ -50,8 +52,60 @@ pub fn upsert_synced_note(
             is_todo,
             is_completed,
             is_pinned,
+            author_id,
+            author_name,
         )
     })
+}
+
+pub(crate) fn upsert_room(
+    id: &str,
+    name: &str,
+    icon: &str,
+    color: u32,
+) -> Result<RoomItem> {
+    with_store(|store| store.upsert_room(id, name, icon, color))
+}
+
+/// Get user profile
+pub fn get_user_profile() -> Result<UserProfile> {
+    with_store(|store| store.get_user_profile())
+}
+
+/// Save user profile
+pub fn save_user_profile(display_name: String, avatar_color: u32, avatar_icon: String) -> Result<()> {
+    with_store(|store| {
+        store.save_user_profile(&UserProfile {
+            display_name: display_name.clone(),
+            avatar_color,
+            avatar_icon,
+        })?;
+        Ok(())
+    })?;
+
+    // Update live P2P node display name
+    crate::get_runtime().spawn(async move {
+        if let Ok(node) = P2pNode::get_or_init().await {
+            node.set_display_name(display_name).await;
+        }
+    });
+
+    Ok(())
+}
+
+/// Set per-thread background P2P sync toggle
+pub fn set_room_background_sync(room_id: String, enabled: bool) -> Result<()> {
+    with_store(|store| store.set_room_background_sync(&room_id, enabled))
+}
+
+/// Save room encryption details and share ticket in vault
+pub fn save_room_encryption_details(room_id: String, encryption_key: String, share_ticket: Option<String>) -> Result<()> {
+    with_store(|store| store.save_room_encryption_details(&room_id, &encryption_key, share_ticket.as_deref()))
+}
+
+/// Query shared rooms with encryption keys for auto-restore
+pub fn get_shared_rooms_with_keys() -> Result<Vec<SharedRoomInfo>> {
+    with_store(|store| store.get_shared_rooms_with_keys())
 }
 
 /// Initialize or unlock vault at a specified custom database file path.
@@ -71,6 +125,14 @@ pub fn init_vault_at_path(db_path: String, passphrase: String) -> Result<VaultSt
     let status = store.get_vault_status()?;
 
     *guard = Some(store);
+
+    // Automatically boot P2P network, re-register shared room keys, and reconnect active threads
+    crate::get_runtime().spawn(async move {
+        if let Ok(node) = P2pNode::get_or_init().await {
+            let _ = node.boot_p2p_network().await;
+        }
+    });
+
     Ok(status)
 }
 
@@ -215,6 +277,11 @@ pub fn search_notes(query: String, room_id_filter: Option<String>) -> Result<Vec
 /// List all available note rooms / channels.
 pub fn list_rooms() -> Result<Vec<RoomItem>> {
     with_store(|store| store.list_rooms())
+}
+
+/// Get a room by its ID.
+pub fn get_room_by_id(room_id: &str) -> Result<RoomItem> {
+    with_store(|store| store.get_room(room_id))
 }
 
 /// Create a new customized room / channel.
@@ -407,3 +474,33 @@ pub async fn subscribe_p2p_events(sink: StreamSink<P2pEvent>) -> Result<()> {
     });
     handle.await?
 }
+
+/// Get the local P2P NodeId
+pub async fn get_local_node_id() -> Result<String> {
+    let handle = crate::get_runtime().spawn(async move {
+        let node = P2pNode::get_or_init().await?;
+        Ok::<String, anyhow::Error>(node.node_id().to_string())
+    });
+    handle.await?
+}
+
+/// Automatically re-hydrate P2P network, re-register all shared room keys, and dial active threads
+pub async fn boot_p2p_network() -> Result<()> {
+    let handle = crate::get_runtime().spawn(async move {
+        let node = P2pNode::get_or_init().await?;
+        node.boot_p2p_network().await
+    });
+    handle.await?
+}
+
+/// Gracefully signal disconnect to all connected peers and close active connections
+pub async fn disconnect_all_peers() -> Result<()> {
+    let handle = crate::get_runtime().spawn(async move {
+        if let Ok(node) = P2pNode::get_or_init().await {
+            node.disconnect_all_peers().await;
+        }
+        Ok::<(), anyhow::Error>(())
+    });
+    handle.await?
+}
+
